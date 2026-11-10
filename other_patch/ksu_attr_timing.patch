@@ -12,14 +12,14 @@
 +         * attr/current probe). Without this the caller's string is skipped
 +         * entirely, so the two probe variants differ by the whole policy
 +         * lookup. Force an equivalent lookup on a syntactically valid
-+         * prefix, guarded because backup_sepolicy is NULL while the
-+         * feature is disabled.
++         * prefix that fails at the very first component, guarded because
++         * backup_sepolicy can be NULL while the feature is disabled.
 +         */
 +        if (str[size - 1] == '\n') {
 +            str[size - 1] = 0;
 +            size--;
 +        }
-+        memcpy(str, "u:r:", 4);
++        memcpy(str, "z:", 2);
 +        if (backup_sepolicy) {
 +            (void)security_context_to_sid_with_policy(backup_sepolicy, str, size,
 +                                                      &tmp_sid, SECSID_NULL,
