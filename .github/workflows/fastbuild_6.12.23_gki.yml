@@ -308,22 +308,13 @@ jobs:
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在添加susfs补丁..."
-            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}-dev
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             cd ./common
-          # 裁剪 SUSFS 补丁：剔除 security/selinux 四个文件的 diff，
-          # 让 KSU 原生 selinux_hide 生效，避免 SUSFS 旧副本留下检测点
-          python3 - <<'PYTRIM'
-          import re, glob
-          src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
-          blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-          kept = [b for b in blocks if "security/selinux/" not in b.split(chr(10))[0]]
-          open("50_trimmed.patch", "w").write("".join(kept))
-          print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
-          PYTRIM
-          patch -p1 -F 3 < 50_trimmed.patch || true
+          # 使用官方完整补丁（不裁剪），对照测试
+          patch -p1 -F 3 < 50_add_susfs_in_gki-*.patch || true
             cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
