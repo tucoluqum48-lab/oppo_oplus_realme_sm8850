@@ -338,6 +338,8 @@ jobs:
           cd kernel_workspace/KernelSU
           wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/ksu_selinux_hide_passthrough.patch
           patch -p1 -N -F 3 < ksu_selinux_hide_passthrough.patch || true
+          # 标记为忽略修改，避免 KSU 版本串带 -dirty 后缀
+          git update-index --assume-unchanged kernel/feature/selinux_hide.c || true
           else
           echo "未检测到 KernelSU 目录，跳过"
           fi
