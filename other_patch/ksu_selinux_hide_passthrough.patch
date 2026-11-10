@@ -1,0 +1,21 @@
+--- a/kernel/feature/selinux_hide.c
++++ b/kernel/feature/selinux_hide.c
+@@ -467,8 +467,18 @@
+         goto call_orig;
+     }
+ 
+     if (strcmp(name, "current")) {
++        goto call_orig;
++    }
++
++    /*
++     * Feature disabled: behave exactly like a stock kernel. Without this,
++     * the hook still runs the backup-policy lookup on the slow path, which
++     * shows up as a measurable A/B timing asymmetry when writing to
++     * /proc/self/attr/current.
++     */
++    if (!ksu_selinux_hide_enabled) {
+         goto call_orig;
+     }
+ #endif
+ 
