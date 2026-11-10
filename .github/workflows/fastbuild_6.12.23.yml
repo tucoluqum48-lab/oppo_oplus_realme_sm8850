@@ -316,7 +316,7 @@ jobs:
           src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
           blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
           DROP = ("security/selinux/hooks.c", "security/selinux/selinuxfs.c", "security/selinux/ss/services.c")  # AVC_KEEP
-kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
+          kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
           open("50_trimmed.patch", "w").write("".join(kept))
           print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
           PYTRIM
