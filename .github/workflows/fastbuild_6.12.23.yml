@@ -336,8 +336,17 @@ jobs:
           echo "在 my_setprocattr 为换行路径补等价开销（PR#3877 思路）…"
           if [ -d kernel_workspace/KernelSU ]; then
           cd kernel_workspace/KernelSU
+          # 上游若已自带等价实现（memcpy "u:r:" 前缀技巧），直接跳过，避免重复打补丁导致编译冲突
+          if grep -q 'memcpy(str, "u:r:", 4)' kernel/feature/selinux_hide.c; then
+          echo "上游 selinux_hide.c 已包含等价时序处理，跳过本地补丁"
+          else
           wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/ksu_attr_timing.patch
-          patch -p1 -N -F 3 < ksu_attr_timing.patch || true
+          if patch -p1 -N -F 3 < ksu_attr_timing.patch; then
+          echo "时序均衡补丁应用成功"
+          else
+          echo "!! 时序均衡补丁应用失败（上游可能已改动），本次构建不含该补丁"
+          fi
+          fi
           git update-index --assume-unchanged kernel/feature/selinux_hide.c || true
           else
           echo "未检测到 KernelSU 目录，跳过"
