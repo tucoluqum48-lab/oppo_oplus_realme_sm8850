@@ -309,13 +309,14 @@ jobs:
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             cd ./common
-          # 裁剪 SUSFS 补丁：剔除 security/selinux 四个文件的 diff，
-          # 让 KSU 原生 selinux_hide 生效，避免 SUSFS 旧副本留下检测点
+          # 裁剪 SUSFS 补丁：只保留 security/selinux/avc.c（提供 avc_log_spoofing），
+          # 剔除 hooks.c / selinuxfs.c / ss/services.c —— 那三个会接管 KSU 的
           python3 - <<'PYTRIM'
           import re, glob
           src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
           blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-          kept = [b for b in blocks if "security/selinux/" not in b.split(chr(10))[0]]
+          DROP = ("security/selinux/hooks.c", "security/selinux/selinuxfs.c", "security/selinux/ss/services.c")  # AVC_KEEP
+kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
           open("50_trimmed.patch", "w").write("".join(kept))
           print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
           PYTRIM
