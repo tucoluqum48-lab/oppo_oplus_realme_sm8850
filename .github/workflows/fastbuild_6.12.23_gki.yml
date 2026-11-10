@@ -262,7 +262,7 @@ jobs:
           if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" || ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
             echo "正在配置BakaSU（由于SukiSU长期未维护无法正常编译，且BakaSU兼容sukisu管理器，故SukiSU源码仓库已重定向为bakasu）..."
             curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
-            echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
+            echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
           # === 把 BakaSU 受信签名换成本 fork 的 kpm.jks 证书（内置，不依赖动态管理器）===
           sed -i "s/^#define EXPECTED_SIZE_BAKASU 0x[0-9a-fA-F]*/#define EXPECTED_SIZE_BAKASU 0x369/" kernel/manager/manager_sign.h
