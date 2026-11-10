@@ -348,13 +348,6 @@ jobs:
           echo "未检测到 KernelSU 目录，跳过"
           fi
 
-      - name: 应用 attr/current 时序均衡补丁
-        run: |
-          echo "均衡 setprocattr 快慢路径耗时（消除 A/B 时序差）…"
-          cd kernel_workspace/common
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/selinux_setprocattr_timing.patch
-          patch -p1 -N -F 3 < selinux_setprocattr_timing.patch || true
-
       - name: 应用 SELinux status 页冻结补丁
         run: |
           echo "正在冻结 SELinux status 页的 policyload（修正返回值，不拦截读取）…"
