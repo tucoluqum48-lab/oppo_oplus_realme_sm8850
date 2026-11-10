@@ -331,6 +331,18 @@ jobs:
             patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
           fi
           
+      - name: 应用 KSU attr 时序均衡补丁
+        run: |
+          echo "在 my_setprocattr 为换行路径补等价开销（PR#3877 思路）…"
+          if [ -d kernel_workspace/KernelSU ]; then
+          cd kernel_workspace/KernelSU
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/ksu_attr_timing.patch
+          patch -p1 -N -F 3 < ksu_attr_timing.patch || true
+          git update-index --assume-unchanged kernel/feature/selinux_hide.c || true
+          else
+          echo "未检测到 KernelSU 目录，跳过"
+          fi
+
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
         if: inputs.lz4_enable
         run: |
