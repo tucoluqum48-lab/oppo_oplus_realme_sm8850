@@ -1,0 +1,29 @@
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -6461,10 +6461,26 @@
+ 			error = security_context_to_sid_force(value, size,
+ 							&sid);
+ 		}
+ 		if (error)
+ 			return error;
++	} else if (size >= 2 && str[0] == '\n') {
++		/*
++		 * Timing equalization: the branch above parses a context and fails
++		 * with -EINVAL. A newline-prefixed value skips that work entirely,
++		 * which makes /proc/self/attr/current timing probes trivially
++		 * distinguishable. Run the same parse on a scratch copy so both
++		 * paths cost the same.
++		 */
++		char scratch[256];
++		unsigned int n = min_t(unsigned int, size, sizeof(scratch));
++		u32 dummy_sid = 0;
++
++		memcpy(scratch, str, n);
++		scratch[0] = 'u';
++		(void)security_context_to_sid(scratch, n, &dummy_sid,
++					      GFP_KERNEL);
+ 	}
+ 
+ 	new = prepare_creds();
+ 	if (!new)
+ 		return -ENOMEM;
