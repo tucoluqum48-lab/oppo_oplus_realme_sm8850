@@ -264,6 +264,10 @@ jobs:
             curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
+          # === 把 BakaSU 受信签名换成本 fork 的 kpm.jks 证书（内置，不依赖动态管理器）===
+          sed -i "s/^#define EXPECTED_SIZE_BAKASU 0x[0-9a-fA-F]*/#define EXPECTED_SIZE_BAKASU 0x369/" kernel/manager/manager_sign.h
+          sed -i "s/^#define EXPECTED_HASH_BAKASU .*/#define EXPECTED_HASH_BAKASU \"77969000a4789181b19bf0cdd5ef24b2ecf731e17082e439e4d1e75f1bad673d\"/" kernel/manager/manager_sign.h
+          grep -n BAKASU kernel/manager/manager_sign.h
             # 生成自定义版本号（基于提交计数）, 失败时使用 114514
             KSU_VERSION=$(expr $(git rev-list --count main) + 30700 2>/dev/null || echo 114514)
             # 存储版本号到 GitHub 环境变量
