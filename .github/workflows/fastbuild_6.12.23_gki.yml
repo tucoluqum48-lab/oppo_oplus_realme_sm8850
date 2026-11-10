@@ -313,17 +313,17 @@ jobs:
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             cd ./common
-            # 裁剪 SUSFS 补丁：剔除 security/selinux 四个文件的 diff，
-            # 让 KSU 原生 selinux_hide 生效，避免 SUSFS 旧副本留下检测点
-            python3 - <<'PYTRIM'
-            import re, glob
-            src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
-            blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-            kept = [b for b in blocks if "security/selinux/" not in b.split(chr(10))[0]]
-            open("50_trimmed.patch", "w").write("".join(kept))
-            print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
-            PYTRIM
-            patch -p1 -F 3 < 50_trimmed.patch || true
+          # 裁剪 SUSFS 补丁：剔除 security/selinux 四个文件的 diff，
+          # 让 KSU 原生 selinux_hide 生效，避免 SUSFS 旧副本留下检测点
+          python3 - <<'PYTRIM'
+          import re, glob
+          src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
+          blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
+          kept = [b for b in blocks if "security/selinux/" not in b.split(chr(10))[0]]
+          open("50_trimmed.patch", "w").write("".join(kept))
+          print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
+          PYTRIM
+          patch -p1 -F 3 < 50_trimmed.patch || true
             cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
