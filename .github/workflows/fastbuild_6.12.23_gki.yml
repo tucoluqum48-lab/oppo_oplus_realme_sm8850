@@ -335,6 +335,17 @@ jobs:
             patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
           fi
           
+      - name: 应用 KSU selinux_hide 直通补丁
+        run: |
+          echo "让 setprocattr hook 在 selinux_hide 关闭时直通（消除 A/B 时序差）…"
+          if [ -d kernel_workspace/KernelSU ]; then
+          cd kernel_workspace/KernelSU
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/ksu_selinux_hide_passthrough.patch
+          patch -p1 -N -F 3 < ksu_selinux_hide_passthrough.patch || true
+          else
+          echo "未检测到 KernelSU 目录，跳过"
+          fi
+
       - name: 应用 SELinux status 页冻结补丁
         run: |
           echo "正在冻结 SELinux status 页的 policyload（修正返回值，不拦截读取）…"
