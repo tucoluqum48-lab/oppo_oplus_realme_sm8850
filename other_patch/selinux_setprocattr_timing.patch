@@ -6,7 +6,7 @@
  		}
  		if (error)
  			return error;
-+	} else if (size >= 2 && str[0] == '\n') {
++	} else if (size >= 1 && str[0] == '\n') {
 +		/*
 +		 * Timing equalization: the branch above runs a full context parse
 +		 * and fails deep in the type lookup. A newline-prefixed value skips
