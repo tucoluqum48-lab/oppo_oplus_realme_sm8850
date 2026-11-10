@@ -1,0 +1,17 @@
+--- a/security/selinux/status.c
++++ b/security/selinux/status.c
+@@ -112,7 +112,13 @@
+ 		status->sequence++;
+ 		smp_wmb();
+ 
+-		status->policyload = seqno;
++		/*
++		 * Only expose the first (clean) policy load to userspace.
++		 * Later reloads - module/tooling injected rules - stay internal,
++		 * so the status page reads exactly like a stock boot.
++		 */
++		if (!status->policyload)
++			status->policyload = seqno;
+ 		status->deny_unknown = !security_get_allow_unknown();
+ 
+ 		smp_wmb();
