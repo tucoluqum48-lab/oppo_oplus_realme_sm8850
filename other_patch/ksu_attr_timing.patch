@@ -1,0 +1,36 @@
+--- a/kernel/feature/selinux_hide.c
++++ b/kernel/feature/selinux_hide.c
+@@ -504,10 +504,33 @@
+         error2 = ksu_security_context_to_sid(&policydb, sidtab_ptr, backup_policydb, backup_sidtab, value, size,
+                                              &tmp_sid, SECSID_NULL, GFP_KERNEL, &sid, &error);
+ #endif
+         if (error2 || error)
+             return error2 ?: error;
++    } else if (size >= 4) {
++        /*
++         * Timing equalization for the newline-prefixed path (Duck's
++         * attr/current probe). Without this the caller's string is skipped
++         * entirely, so the two probe variants differ by the whole policy
++         * lookup. Force an equivalent lookup on a syntactically valid
++         * prefix, guarded because backup_sepolicy is NULL while the
++         * feature is disabled.
++         */
++        if (str[size - 1] == '\n') {
++            str[size - 1] = 0;
++            size--;
++        }
++        memcpy(str, "u:r:", 4);
++        if (backup_sepolicy) {
++            (void)security_context_to_sid_with_policy(backup_sepolicy, str, size,
++                                                      &tmp_sid, SECSID_NULL,
++                                                      GFP_KERNEL, NULL, NULL);
++        } else {
++            struct cred *tmp_cred = prepare_creds();
++            if (tmp_cred)
++                abort_creds(tmp_cred);
++        }
+     }
+ 
+     new = prepare_creds();
+     if (!new)
+         return -ENOMEM;
