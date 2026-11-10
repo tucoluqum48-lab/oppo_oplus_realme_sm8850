@@ -8,20 +8,20 @@
  			return error;
 +	} else if (size >= 2 && str[0] == '\n') {
 +		/*
-+		 * Timing equalization: the branch above parses a context and fails
-+		 * with -EINVAL. A newline-prefixed value skips that work entirely,
-+		 * which makes /proc/self/attr/current timing probes trivially
-+		 * distinguishable. Run the same parse on a scratch copy so both
-+		 * paths cost the same.
++		 * Timing equalization: the branch above runs a full context parse
++		 * and fails deep in the type lookup. A newline-prefixed value skips
++		 * that work, which makes /proc/self/attr/current timing probes
++		 * trivially distinguishable.
++		 *
++		 * Parsing a mutated copy of the caller's string is not enough - it
++		 * can bail out at the first field. Use a canonical, well-formed but
++		 * unrepresentable context so the same depth is always traversed.
 +		 */
-+		char scratch[256];
-+		unsigned int n = min_t(unsigned int, size, sizeof(scratch));
++		static const char dummy_ctx[] = "u:r:susfs_timing_dummy:s0:c0";
 +		u32 dummy_sid = 0;
 +
-+		memcpy(scratch, str, n);
-+		scratch[0] = 'u';
-+		(void)security_context_to_sid(scratch, n, &dummy_sid,
-+					      GFP_KERNEL);
++		(void)security_context_to_sid(dummy_ctx, sizeof(dummy_ctx) - 1,
++					      &dummy_sid, GFP_KERNEL);
  	}
  
  	new = prepare_creds();
