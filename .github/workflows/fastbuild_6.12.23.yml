@@ -263,6 +263,10 @@ jobs:
             # === 把 BakaSU 受信签名换成本 fork 的 kpm.jks 证书（内置，不依赖动态管理器）===
             sed -i "s/^#define EXPECTED_SIZE_BAKASU 0x[0-9a-fA-F]*/#define EXPECTED_SIZE_BAKASU 0x369/" kernel/manager/manager_sign.h
             sed -i "s/^#define EXPECTED_HASH_BAKASU .*/#define EXPECTED_HASH_BAKASU \"77969000a4789181b19bf0cdd5ef24b2ecf731e17082e439e4d1e75f1bad673d\"/" kernel/manager/manager_sign.h
+            # === 把 KOWX712 槽位换成官方 BakaSU 的签名（多管理器支持下多认一个官方 APK）===
+            sed -i "s/^#define EXPECTED_SIZE_KOWX712 0x[0-9a-fA-F]*/#define EXPECTED_SIZE_KOWX712 0x377/" kernel/manager/manager_sign.h
+            sed -i "s/^#define EXPECTED_HASH_KOWX712 .*/#define EXPECTED_HASH_KOWX712 \"d3469712b6214462764a1d8d3e5cbe1d6819a0b629791b9f4101867821f1df64\"/" kernel/manager/manager_sign.h
+            grep -nE "EXPECTED_(SIZE|HASH)_(BAKASU|KOWX712|OFFICIAL)" kernel/manager/manager_sign.h
             grep -n BAKASU kernel/manager/manager_sign.h
             # 让 git 忽略这处本地修改，避免 KSU 版本号带上 -dirty 后缀
             git update-index --assume-unchanged kernel/manager/manager_sign.h || true
