@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
+ *
+ * 与 susfs4ksu-for-lkm 的 hide_modules 等价，但走源码：没有 .ko、没有运行时 hook、
+ * 没有模块条目需要自己擦。
+ *
+ *   1) /proc/modules  : kernel/module/procfs.c 的 m_show() 开头 return 0
+ *                        -> 所有读者（含 root）都看不到这一行
+ *   2) /proc/kallsyms : kernel/kallsyms.c 的 s_show() 开头按 module_name 过滤
+ *                        -> 该模块的 __kstrtab_* / *_init 等符号一并消失
+ *   3) /sys/module/<name> : 不在这里做。用户态用
+ *                        ksu_susfs add_sus_path /sys/module/<name>
+ *                        效果为「非 root 得到 ENOENT，root 仍可读」
+ *
+ * 名单有两个来源，取并集：
+ *   - 编译期常量 susfs_hidden_modules[]：开机即生效，无需用户态配合
+ *   - 运行时表：写 /proc/susfs_hide_modules（0600，仅 root）
+ *       echo "add zygisk_loader" > /proc/susfs_hide_modules
+ *       echo "del zygisk_loader" > /proc/susfs_hide_modules
+ *       echo clear               > /proc/susfs_hide_modules   # 只清运行时表
+ *       cat /proc/susfs_hide_modules                          # 看两边的现状
+ *     不定义 SUSFS_HIDE_MODULES_NO_CTL 时才编译这个节点。
+ */
+
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>	/* MODULE_NAME_LEN */
+#include <linux/string.h>
+#include <linux/spinlock.h>
+#include <linux/atomic.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
+#include <linux/capability.h>
+#include <linux/susfs_hide_modules.h>
+
+/*
+ * 编译期名单。名字必须精确匹配 struct module->name，也就是
+ *   lsmod 第一列 / cat /proc/modules 第一列（不带 .ko，'-' 已转成 '_'）
+ */
+static const char *const susfs_hidden_modules[] = {
+	"qpace_drv",
+	"qpace_zram",
+};
+
+#ifndef SUSFS_HIDE_MODULES_RT_MAX
+#define SUSFS_HIDE_MODULES_RT_MAX 32
+#endif
+
+static char susfs_hidden_rt[SUSFS_HIDE_MODULES_RT_MAX][MODULE_NAME_LEN];
+static int susfs_hidden_rt_nr;
+static DEFINE_SPINLOCK(susfs_hidden_lock);
+
+/* 命中统计：/proc/susfs_hide_modules 里可读，用来确认过滤真的在生效 */
+static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
+static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
+
+/* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
+static bool susfs_hide_match(const char *name)
+{
+	unsigned long flags;
+	bool hit = false;
+	int i;
+
+	if (!name || !name[0])
+		return false;
+
+	for (i = 0; i < ARRAY_SIZE(susfs_hidden_modules); i++) {
+		if (!strcmp(name, susfs_hidden_modules[i]))
+			return true;
+	}
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	for (i = 0; i < susfs_hidden_rt_nr; i++) {
+		if (!strcmp(name, susfs_hidden_rt[i])) {
+			hit = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+
+	return hit;
+}
+
+/* /proc/modules 的 m_show() 调用：命中就计一条 */
+bool susfs_hide_module_name(const char *name)
+{
+	if (susfs_hide_match(name)) {
+		atomic_inc(&susfs_n_mod_skipped);
+		return true;
+	}
+	return false;
+}
+
+/* /proc/kallsyms 的 s_show() 调用：只对模块符号计一条 */
+bool susfs_hide_module_symbol(const char *module_name)
+{
+	if (susfs_hide_match(module_name)) {
+		atomic_inc(&susfs_n_sym_skipped);
+		return true;
+	}
+	return false;
+}
+
+#ifndef SUSFS_HIDE_MODULES_NO_CTL
+
+static int susfs_hide_rt_add(const char *name)
+{
+	unsigned long flags;
+	int i, ret = 0;
+
+	if (!name || !name[0])
+		return -EINVAL;
+	if (strnlen(name, MODULE_NAME_LEN) >= MODULE_NAME_LEN)
+		return -ENAMETOOLONG;
+
+	/* 已在编译期表里：无需重复登记 */
+	for (i = 0; i < ARRAY_SIZE(susfs_hidden_modules); i++) {
+		if (!strcmp(name, susfs_hidden_modules[i]))
+			return 0;
+	}
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	for (i = 0; i < susfs_hidden_rt_nr; i++) {
+		if (!strcmp(name, susfs_hidden_rt[i]))
+			goto out_unlock;
+	}
+	if (susfs_hidden_rt_nr >= SUSFS_HIDE_MODULES_RT_MAX) {
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
+	strscpy(susfs_hidden_rt[susfs_hidden_rt_nr++], name, MODULE_NAME_LEN);
+out_unlock:
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+	return ret;
+}
+
+static int susfs_hide_rt_del(const char *name)
+{
+	unsigned long flags;
+	int i, ret = -ENOENT;
+
+	if (!name || !name[0])
+		return -EINVAL;
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	for (i = 0; i < susfs_hidden_rt_nr; i++) {
+		if (!strcmp(name, susfs_hidden_rt[i])) {
+			/* 尾部前移，保持数组紧凑 */
+			memmove(&susfs_hidden_rt[i], &susfs_hidden_rt[i + 1],
+				(size_t)(susfs_hidden_rt_nr - i - 1) * MODULE_NAME_LEN);
+			susfs_hidden_rt_nr--;
+			memset(&susfs_hidden_rt[susfs_hidden_rt_nr], 0, MODULE_NAME_LEN);
+			ret = 0;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+
+	return ret;
+}
+
+static void susfs_hide_rt_clear(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	memset(susfs_hidden_rt, 0, sizeof(susfs_hidden_rt));
+	susfs_hidden_rt_nr = 0;
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+}
+
+static int susfs_hide_show(struct seq_file *m, void *v)
+{
+	unsigned long flags;
+	int i;
+
+	seq_puts(m, "compiled:");
+	for (i = 0; i < ARRAY_SIZE(susfs_hidden_modules); i++)
+		seq_printf(m, " %s", susfs_hidden_modules[i]);
+	seq_puts(m, "\n");
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	seq_printf(m, "runtime (%d/%d):", susfs_hidden_rt_nr,
+		   SUSFS_HIDE_MODULES_RT_MAX);
+	for (i = 0; i < susfs_hidden_rt_nr; i++)
+		seq_printf(m, " %s", susfs_hidden_rt[i]);
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+	seq_puts(m, "\n");
+
+	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d\n",
+		   atomic_read(&susfs_n_mod_skipped),
+		   atomic_read(&susfs_n_sym_skipped));
+
+	return 0;
+}
+
+static int susfs_hide_open(struct inode *inode, struct file *file)
+{
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	return single_open(file, susfs_hide_show, NULL);
+}
+
+static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
+				size_t count, loff_t *ppos)
+{
+	char cmd[128], *op, *arg;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (count == 0)
+		return 0;
+	if (count >= sizeof(cmd))
+		return -EINVAL;
+	if (copy_from_user(cmd, ubuf, count))
+		return -EFAULT;
+	cmd[count] = '\0';
+	strim(cmd);
+
+	if (!cmd[0])
+		return 0;
+
+	op = cmd;
+	arg = strchr(cmd, ' ');
+	if (arg) {
+		*arg++ = '\0';
+		arg = skip_spaces(arg);
+	}
+
+	if (!strcmp(op, "clear") && !arg) {
+		susfs_hide_rt_clear();
+		return count;
+	}
+	if (!strcmp(op, "add")) {
+		ret = susfs_hide_rt_add(arg);
+		return ret ? ret : count;
+	}
+	if (!strcmp(op, "del")) {
+		ret = susfs_hide_rt_del(arg);
+		return ret ? ret : count;
+	}
+
+	/* 裸名字等同 add，方便脚本一次写一行 */
+	return susfs_hide_rt_add(op) ? -EINVAL : count;
+}
+
+static const struct proc_ops susfs_hide_proc_ops = {
+	.proc_open	= susfs_hide_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
+	.proc_write	= susfs_hide_write,
+};
+
+static int __init susfs_hide_modules_init(void)
+{
+	if (!proc_create("susfs_hide_modules", 0600, NULL, &susfs_hide_proc_ops))
+		pr_warn("susfs_hide_modules: /proc node not created\n");
+	return 0;
+}
+/* late_initcall：确保 procfs 的 root 已就绪再建节点 */
+late_initcall(susfs_hide_modules_init);
+
+#endif /* SUSFS_HIDE_MODULES_NO_CTL */
