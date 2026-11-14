@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,302 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -70,6 +70,7 @@ index 000000000..0000000
 +/* 命中统计：/proc/susfs_hide_modules 里可读，用来确认过滤真的在生效 */
 +static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 +static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
++static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
 +
 +/* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
 +static bool susfs_hide_match(const char *name)
@@ -103,6 +104,39 @@ index 000000000..0000000
 +{
 +	if (susfs_hide_match(name)) {
 +		atomic_inc(&susfs_n_mod_skipped);
++		return true;
++	}
++	return false;
++}
++
++/*
++ * 符号名过滤：处理"符号定义在别的模块里"的情况。
++ * 例：qpace_drv 的压缩函数被厂商 zram.ko 包了一层，
++ *     符号归属变成 [zram]，按模块名抓不到，只能按符号名抹。
++ * 只认 qpace 这一个前缀串，避免误伤无关符号。
++ */
++static const char *const susfs_hidden_sym_parts[] = {
++	"qpace",
++};
++
++static bool susfs_hide_sym_name_match(const char *name)
++{
++	int i;
++
++	if (!name || !name[0])
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(susfs_hidden_sym_parts); i++) {
++		if (strstr(name, susfs_hidden_sym_parts[i]))
++			return true;
++	}
++	return false;
++}
++
++bool susfs_hide_symbol_name(const char *name)
++{
++	if (susfs_hide_sym_name_match(name)) {
++		atomic_inc(&susfs_n_symname_skipped);
 +		return true;
 +	}
 +	return false;
@@ -204,9 +238,10 @@ index 000000000..0000000
 +	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 +	seq_puts(m, "\n");
 +
-+	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d\n",
++	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d symbolname=%d\n",
 +		   atomic_read(&susfs_n_mod_skipped),
-+		   atomic_read(&susfs_n_sym_skipped));
++		   atomic_read(&susfs_n_sym_skipped),
++		   atomic_read(&susfs_n_symname_skipped));
 +
 +	return 0;
 +}
@@ -285,7 +320,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/include/linux/susfs_hide_modules.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,28 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _LINUX_SUSFS_HIDE_MODULES_H
 +#define _LINUX_SUSFS_HIDE_MODULES_H
@@ -295,6 +330,7 @@ index 000000000..0000000
 +#ifdef CONFIG_KSU_SUSFS
 +bool susfs_hide_module_name(const char *name);
 +bool susfs_hide_module_symbol(const char *module_name);
++bool susfs_hide_symbol_name(const char *name);
 +#else
 +static inline bool susfs_hide_module_name(const char *name)
 +{
@@ -302,6 +338,11 @@ index 000000000..0000000
 +}
 +
 +static inline bool susfs_hide_module_symbol(const char *module_name)
++{
++	return false;
++}
++
++static inline bool susfs_hide_symbol_name(const char *name)
 +{
 +	return false;
 +}
@@ -354,7 +395,7 @@ diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
 +#endif
  #include <linux/kallsyms.h>
  #include <linux/init.h>
-@@ -728,10 +731,20 @@ static int s_show(struct seq_file *m, void *p)
+@@ -728,10 +731,24 @@ static int s_show(struct seq_file *m, void *p)
  static int s_show(struct seq_file *m, void *p)
  {
  	void *value;
@@ -371,6 +412,10 @@ diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
 +	 */
 +	if (iter->module_name[0] &&
 +	    susfs_hide_module_symbol(iter->module_name))
++		return 0;
++	/* 符号定义在别的模块里（如厂商 zram 包了 qpace 的压族函数）
++	 * 时按模块名抓不到，这里按符号名再抹一次 */
++	if (susfs_hide_symbol_name(iter->name))
 +		return 0;
 +#endif
 +
