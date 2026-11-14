@@ -313,4 +313,44 @@ susfs_hide_modules/0001-susfs-hide-modules.patch
 | `[ -f fs/susfs.c ]` + `grep -q susfs fs/Makefile` | susfs 主补丁那步带 `\|\| true`，静默失败时这里拦住 |
 | `grep -q "susfs_hide_modules.o" fs/Makefile` | Makefile 那一 hunk 没落地 |
 | `grep -q susfs_hide_module_name kernel/module/procfs.c` / `kernel/kallsyms.c` | 两个调用点没落地 |
-| `grep -q qpace_drv fs/susfs_hide_modules.c` | 名单是占位符（等于没藏） |
+| `grep -q qpace_drv fs/susfs_hide_modules.c` | 名单是占位符（等于没藏） |## 零宽字符 / 可忽略码点路径拦截
+
+对应 CVE-2024-43093 那类绕过：检测方在 `/storage/emulated/0/Android/data/<pkg>`
+路径里插入零宽字符或可忽略码点，让字符串匹配失效、却仍解析到真实目录，
+从而读到被 HMA 隐藏的 app 的目录、反推包名
+（Duck Detector 的 "Android/data ZWC Bypass" / "Ignorable CodePoint Bypass"）。
+
+实现：`fs/namei.c` 的 `getname_flags()` 里检查路径。
+
+```c
+if (unlikely(susfs_is_zwc_bypass_path(kname, len))) {
+	__putname(result);
+	return ERR_PTR(-EINVAL);
+}
+```
+
+**判定规则（不依赖字符表，覆盖所有 Unicode 手段）**
+
+```
+1. 路径全 ASCII → 直接放行（绝大多数路径）
+2. 丢掉所有非 ASCII 字节，得到 norm
+3. norm 里出现 "Android/data"，且非 ASCII 字节落在它之前（含）
+   → 判定为绕过，返回 -EINVAL
+```
+
+所以零宽字符、可忽略码点、变体选择符、bidi 控制符、甚至中文目录名
+插在 `Android/data` 之前，统统拦得住。
+
+**不误伤**：`Android/data/com.foo/files/👨‍👩‍👧.png` 里 emoji 在
+`Android/data` 之后，放行。
+
+**单测覆盖**（12 个用例全过）：
+
+```
+正常路径 / ZWC / ZWNJ / ZWJ / SOFT HYPHEN / CGJ / BOM / BIDI / VS16 → 按预期
+emoji 文件名在后 → 放行
+中文目录在前     → 拦截
+无关非 ASCII 路径 → 放行
+```
+
+
