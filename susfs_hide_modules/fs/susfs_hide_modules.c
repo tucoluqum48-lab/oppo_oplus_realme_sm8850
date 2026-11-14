@@ -15,11 +15,11 @@
  *
  * 名单有两个来源，取并集：
  *   - 编译期常量 susfs_hidden_modules[]：开机即生效，无需用户态配合
- *   - 运行时表：写 /proc/susfs_hide_modules（0600，仅 root）
- *       echo "add zygisk_loader" > /proc/susfs_hide_modules
- *       echo "del zygisk_loader" > /proc/susfs_hide_modules
- *       echo clear               > /proc/susfs_hide_modules   # 只清运行时表
- *       cat /proc/susfs_hide_modules                          # 看两边的现状
+ *   - 运行时表：写 /proc/oplus_mem_zone（0600，仅 root）
+ *       echo "add zygisk_loader" > /proc/oplus_mem_zone
+ *       echo "del zygisk_loader" > /proc/oplus_mem_zone
+ *       echo clear               > /proc/oplus_mem_zone   # 只清运行时表
+ *       cat /proc/oplus_mem_zone                          # 看两边的现状
  *     不定义 SUSFS_HIDE_MODULES_NO_CTL 时才编译这个节点。
  */
 
@@ -64,7 +64,7 @@ static char susfs_hidden_rt[SUSFS_HIDE_MODULES_RT_MAX][MODULE_NAME_LEN];
 static int susfs_hidden_rt_nr;
 static DEFINE_SPINLOCK(susfs_hidden_lock);
 
-/* 命中统计：/proc/susfs_hide_modules 里可读，用来确认过滤真的在生效 */
+/* 命中统计：/proc/oplus_mem_zone 里可读，用来确认过滤真的在生效 */
 static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
@@ -112,7 +112,7 @@ static void susfs_hide_node_hold(void)
 
 	if (susfs_node_held)
 		return;
-	if (kern_path("/proc/susfs_hide_modules", LOOKUP_FOLLOW, &p))
+	if (kern_path("/proc/oplus_mem_zone", LOOKUP_FOLLOW, &p))
 		return;
 	inode = d_backing_inode(p.dentry);
 	if (inode && inode->i_mapping) {
@@ -408,7 +408,7 @@ static const struct proc_ops susfs_hide_proc_ops = {
 
 static int __init susfs_hide_modules_init(void)
 {
-	if (!proc_create("susfs_hide_modules", 0600, NULL, &susfs_hide_proc_ops))
+	if (!proc_create("oplus_mem_zone", 0600, NULL, &susfs_hide_proc_ops))
 		pr_warn("susfs_hide_modules: /proc node not created\n");
 	else
 		susfs_hide_node_hold();
