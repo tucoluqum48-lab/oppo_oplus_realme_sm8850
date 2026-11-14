@@ -238,21 +238,21 @@ ksu_susfs config open_redirect add /sys/block/zram0/comp_algorithm /data/local/t
 
 ## 八、运行时名单（后装的 ko 不用重编）
 
-`/proc/susfs_hide_modules` —— **0600，仅 root**，用来在运行时增删名单，
+`/proc/oplus_mem_zone` —— **0600，仅 root**，用来在运行时增删名单，
 和编译期数组取并集，改完立即生效（`m_show()` 每次读都重新比对）。
 
 ```sh
 # 新增：后装的任何 ko，装完立刻登记，不用重编内核
-echo "add zygisk_loader" > /proc/susfs_hide_modules
+echo "add zygisk_loader" > /proc/oplus_mem_zone
 
 # 删除
-echo "del zygisk_loader" > /proc/susfs_hide_modules
+echo "del zygisk_loader" > /proc/oplus_mem_zone
 
 # 清空运行时表（编译期那两条不受影响）
-echo clear > /proc/susfs_hide_modules
+echo clear > /proc/oplus_mem_zone
 
 # 查看现状
-cat /proc/susfs_hide_modules
+cat /proc/oplus_mem_zone
 # compiled: qpace_drv qpace_zram
 # runtime (2/32):
 ```
@@ -275,7 +275,7 @@ cat /proc/susfs_hide_modules
 ```sh
 for ko in $(find /data/adb/modules -name '*.ko' -type f 2>/dev/null); do
     n=$(basename "$ko" .ko | tr '-' '_')
-    cut -d' ' -f1 /proc/modules | grep -qx "$n" && echo "add $n" > /proc/susfs_hide_modules
+    cut -d' ' -f1 /proc/modules | grep -qx "$n" && echo "add $n" > /proc/oplus_mem_zone
 done
 ```
 
