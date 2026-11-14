@@ -20,6 +20,9 @@ bool susfs_hide_symbol_name(const char *name);
 
 /* priority uid filter：kernel/sys.c 与 block/ioprio.c 会调用 */
 bool susfs_prio_uid_filtered(u32 uid);
+
+/* 零宽字符路径拦截：fs/namei.c 的 getname_flags() 调用 */
+bool susfs_is_zwc_bypass_path(const char *name, int len);
 #else
 static inline bool susfs_hide_module_name(const char *name)
 {
@@ -37,6 +40,11 @@ static inline bool susfs_hide_symbol_name(const char *name)
 }
 
 static inline bool susfs_prio_uid_filtered(u32 uid)
+{
+	return false;
+}
+
+static inline bool susfs_is_zwc_bypass_path(const char *name, int len)
 {
 	return false;
 }
