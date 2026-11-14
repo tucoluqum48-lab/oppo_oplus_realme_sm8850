@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,525 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -320,39 +320,29 @@ index 000000000..0000000
 + *       这样 Android/data/xxx/files/👨‍👩‍👧.png 这类合法文件名不受影响。
 + * ------------------------------------------------------------------ */
 +
-+struct susfs_zwc_seq {
-+	u8 b0, b1, b2;
-+};
-+
-+static const struct susfs_zwc_seq susfs_zwc_seqs[] = {
-+	{0xE2, 0x80, 0x8B},	/* U+200B ZERO WIDTH SPACE */
-+	{0xE2, 0x80, 0x8C},	/* U+200C ZWNJ */
-+	{0xE2, 0x80, 0x8D},	/* U+200D ZWJ */
-+	{0xE2, 0x80, 0x8E},	/* U+200E LRM */
-+	{0xE2, 0x80, 0x8F},	/* U+200F RLM */
-+	{0xE2, 0x81, 0xA0},	/* U+2060 WORD JOINER */
-+	{0xE2, 0x81, 0xA1},	/* U+2061 */
-+	{0xE2, 0x81, 0xA2},	/* U+2062 */
-+	{0xE2, 0x81, 0xA3},	/* U+2063 */
-+	{0xE2, 0x81, 0xA4},	/* U+2064 */
-+	{0xE1, 0xA0, 0x8E},	/* U+180E MONGOLIAN VOWEL SEPARATOR */
-+	{0xE3, 0x85, 0xA4},	/* U+3164 HANGUL FILLER */
-+	{0xEF, 0xBB, 0xBF},	/* U+FEFF BOM */
-+};
-+
++/*
++ * 判定规则（不依赖具体字符表）：
++ *   把路径里的非 ASCII 字符全部丢掉，得到 norm；
++ *   如果 norm 里出现 "Android/data"，且有非 ASCII 字符落在它之前
++ *   → 判定为绕过，返回 true。
++ *
++ * 这样任何 Unicode 手段（零宽、可忽略码点、变体选择符、bidi 控制符…）
++ * 都覆盖得到，不需要维护字符表。合法的 Android/data 路径是纯 ASCII，
++ * 而文件名里的 emoji 在 "Android/data" 之后，不受影响。
++ */
 +#define SUSFS_ZWC_NORM_MAX	256
 +
 +bool susfs_is_zwc_bypass_path(const char *name, int len)
 +{
 +	char norm[SUSFS_ZWC_NORM_MAX];
-+	int i, k, n = 0, first_skip = -1;
++	int i, n = 0, first_skip = -1;
 +	bool non_ascii = false;
 +	const char *hit;
 +
 +	if (!name || len <= 0)
 +		return false;
 +
-+	/* 全 ASCII 不可能命中，绝大多数路径在这里就返回 */
++	/* 全 ASCII → 不可能是绕过（绝大多数路径走这条） */
 +	for (i = 0; i < len; i++) {
 +		if ((unsigned char)name[i] >= 0x80) {
 +			non_ascii = true;
@@ -362,40 +352,27 @@ index 000000000..0000000
 +	if (!non_ascii)
 +		return false;
 +
-+	for (i = 0; i < len; ) {
-+		bool skipped = false;
-+
-+		for (k = 0; k < ARRAY_SIZE(susfs_zwc_seqs); k++) {
-+			if (i + 2 < len &&
-+			    (u8)name[i] == susfs_zwc_seqs[k].b0 &&
-+			    (u8)name[i + 1] == susfs_zwc_seqs[k].b1 &&
-+			    (u8)name[i + 2] == susfs_zwc_seqs[k].b2) {
-+				if (first_skip < 0)
-+					first_skip = n;
-+				i += 3;
-+				skipped = true;
-+				break;
-+			}
++	/* 只保留 ASCII 字节，记录第一个非 ASCII 字符对应的输出位置 */
++	for (i = 0; i < len; i++) {
++		if ((unsigned char)name[i] < 0x80) {
++			if (n >= SUSFS_ZWC_NORM_MAX - 1)
++				return false;	/* 路径过长，不处理 */
++			norm[n++] = name[i];
++		} else if (first_skip < 0) {
++			first_skip = n;
 +		}
-+		if (skipped)
-+			continue;
-+		if (n >= SUSFS_ZWC_NORM_MAX - 1)
-+			return false;	/* 太长就不管了，正常路径不会到这里 */
-+		norm[n++] = name[i++];
 +	}
 +	norm[n] = '\0';
 +
 +	if (first_skip < 0)
-+		return false;		/* 没有可忽略字符 */
++		return false;
 +
 +	hit = strstr(norm, "Android/data");
 +	if (!hit)
 +		return false;
-+	/* 只有落在 "Android/data" 之前（含）的可忽略字符才算绕过 */
-+	if (first_skip > (int)(hit - norm) + 12)
-+		return false;
 +
-+	return true;
++	/* 非 ASCII 字符出现在 "Android/data" 之内或之前 → 绕过 */
++	return first_skip <= (int)(hit - norm) + 12;
 +}
 +
 +/* ------------------------------------------------------------------
