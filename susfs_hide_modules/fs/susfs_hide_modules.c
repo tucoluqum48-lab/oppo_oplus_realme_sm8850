@@ -323,6 +323,9 @@ static char ko_pend[KO_PEND_MAX][MODULE_NAME_LEN];
 static int  ko_pend_n;
 static DEFINE_SPINLOCK(ko_pend_lock);
 
+/* 前向声明：probe work 会用到（定义在后面） */
+static bool ko_auto_gate(void);
+
 struct ko_bfs_ent {
 	char path[KO_PATH_LEN];
 	u8   depth;
@@ -391,25 +394,38 @@ static bool ko_dirs_actor(struct dir_context *ctx, const char *name, int namelen
 	return true;
 }
 
-/* 收集目录里的 *.ko，按文件名算出模块名并登记 */
+/*
+ * 注意：dir_context 的 actor 跑在文件系统的目录遍历里（持有 inode 锁），
+ * 回调里绝对不能调用 kern_path / rt_add 这类可能睡眠的函数，否则可能死锁。
+ * 所以这里只把名字抄进缓冲，真正的登记放到 iterate_dir 返回之后。
+ */
+struct ko_file_iter {
+	struct dir_context ctx;
+	char (*names)[MODULE_NAME_LEN];
+	int max;
+	int nr;
+};
+
 static bool ko_files_actor(struct dir_context *ctx, const char *name, int namelen,
 			   loff_t pos, u64 ino, unsigned type)
 {
-	char mod[MODULE_NAME_LEN];
+	struct ko_file_iter *it = container_of(ctx, struct ko_file_iter, ctx);
+	char *slot;
 	int i, n = 0;
 
 	if (type != DT_REG && type != DT_UNKNOWN)
 		return true;
 	if (namelen <= 3 || strncmp(name + namelen - 3, ".ko", 3))
 		return true;
-
-	for (i = 0; i < namelen - 3 && n < MODULE_NAME_LEN - 1; i++)
-		mod[n++] = (name[i] == '-') ? '_' : name[i];
-	mod[n] = '\0';
-	if (n == 0 || ko_is_vendor_module(mod))
+	if (it->nr >= it->max)
 		return true;
 
-	(void)susfs_hide_rt_add(mod);
+	slot = it->names[it->nr];
+	for (i = 0; i < namelen - 3 && n < MODULE_NAME_LEN - 1; i++)
+		slot[n++] = (name[i] == '-') ? '_' : name[i];
+	slot[n] = '\0';
+	if (n > 0)
+		it->nr++;
 	return true;
 }
 
@@ -473,12 +489,17 @@ static bool ko_probe_name(const char *name)
 	return false;
 }
 
-/* 开机扫一遍缓存目录里的 *.ko */
+/* 开机扫一遍缓存目录里的 *.ko：先收集名字，再在遍历之外登记 */
 static void ko_boot_scan(void)
 {
-	struct dir_context ctx;
+	struct ko_file_iter it;
 	struct file *f;
-	int i;
+	int i, j;
+
+	it.names = kcalloc(KO_DIR_MAX, MODULE_NAME_LEN, GFP_KERNEL);
+	if (!it.names)
+		return;
+	it.max = KO_DIR_MAX;
 
 	mutex_lock(&ko_cache_lock);
 	ko_cache_ensure_locked();
@@ -486,12 +507,21 @@ static void ko_boot_scan(void)
 		f = ko_open_dir(ko_dirs[i]);
 		if (IS_ERR(f))
 			continue;
-		memset(&ctx, 0, sizeof(ctx));
-		ctx.actor = ko_files_actor;
-		iterate_dir(f, &ctx);
+		it.nr = 0;
+		memset(&it.ctx, 0, sizeof(it.ctx));
+		it.ctx.actor = ko_files_actor;
+		iterate_dir(f, &it.ctx);
 		filp_close(f, NULL);
+
+		/* 遍历已经结束，这里可以安全地做路径查找 */
+		for (j = 0; j < it.nr; j++) {
+			if (ko_is_vendor_module(it.names[j]))
+				continue;
+			(void)susfs_hide_rt_add(it.names[j]);
+		}
 	}
 	mutex_unlock(&ko_cache_lock);
+	kfree(it.names);
 }
 
 static void ko_probe_work_fn(struct work_struct *w)
@@ -507,6 +537,8 @@ static void ko_probe_work_fn(struct work_struct *w)
 	ko_pend_n = 0;
 	spin_unlock_irqrestore(&ko_pend_lock, flags);
 	if (!n)
+		return;
+	if (!ko_auto_gate())
 		return;
 
 	mutex_lock(&ko_cache_lock);
@@ -556,12 +588,40 @@ static struct notifier_block ko_module_nb = {
 	.notifier_call = ko_module_notify,
 };
 
+/*
+ * 自动发现的开关：默认关闭。
+ *   · 建一个 /data/adb/hide-ko/auto 文件即可启用（恢复模式下也能删掉它）
+ *   · 或者 echo "scan on" > /proc/oplus_mem_zone
+ * 这样即使自动发现的代码有问题，首刷也不会卡开机。
+ */
+static bool ko_auto_enabled;
+
+static bool ko_auto_gate(void)
+{
+	struct path p;
+
+	if (ko_auto_enabled)
+		return true;
+	if (kern_path("/data/adb/hide-ko/auto", 0, &p) == 0) {
+		path_put(&p);
+		ko_auto_enabled = true;
+		return true;
+	}
+	return false;
+}
+
 static void ko_boot_work_fn(struct work_struct *w);
 static DECLARE_DELAYED_WORK(ko_boot_dw, ko_boot_work_fn);
 static int ko_boot_rounds;
 
 static void ko_boot_work_fn(struct work_struct *w)
 {
+	/* 没启用就只做重试，不碰文件系统（首刷安全） */
+	if (!ko_auto_gate()) {
+		if (++ko_boot_rounds < 8)
+			schedule_delayed_work(&ko_boot_dw, 15 * HZ);
+		return;
+	}
 	ko_boot_scan();
 	if (!ko_cache_ok && ++ko_boot_rounds < 4)
 		schedule_delayed_work(&ko_boot_dw, 15 * HZ);
@@ -590,7 +650,8 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 		   atomic_read(&susfs_n_sym_skipped),
 		   atomic_read(&susfs_n_symname_skipped),
 		   atomic_read(&susfs_n_sysfs_marked));
-	seq_printf(m, "auto: dirs=%d cache=%s probe_hits=%d probe_miss=%d notify=%d\n",
+	seq_printf(m, "auto: %s dirs=%d cache=%s probe_hits=%d probe_miss=%d notify=%d\n",
+		   ko_auto_enabled ? "on" : "off",
 		   ko_dir_n, ko_cache_ok ? "ok" : "no",
 		   atomic_read(&ko_n_probe_hits),
 		   atomic_read(&ko_n_probe_miss),
@@ -644,6 +705,19 @@ static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 	if (!strcmp(op, "del")) {
 		ret = susfs_hide_rt_del(arg);
 		return ret ? ret : count;
+	}
+	if (!strcmp(op, "scan")) {
+		if (arg && !strcmp(arg, "on")) {
+			ko_auto_enabled = true;
+			ko_boot_rounds = 0;
+			schedule_delayed_work(&ko_boot_dw, 2 * HZ);
+			return count;
+		}
+		if (arg && !strcmp(arg, "off")) {
+			ko_auto_enabled = false;
+			return count;
+		}
+		return -EINVAL;
 	}
 
 	/* 裸名字等同 add，方便脚本一次写一行 */
