@@ -356,8 +356,19 @@ bool susfs_is_zwc_bypass_path(const char *name, int len)
 	if (!hit)
 		return false;
 
-	/* 非 ASCII 字符出现在 "Android/data" 之内或之前 → 绕过 */
-	return first_skip <= (int)(hit - norm) + 12;
+	/*
+	 * 窗口 = "Android/data" 加上紧跟的包名段。
+	 * 检测方既可能在 Android/data 之前插字符，也可能插在包名里
+	 * （例如 com.resukisu​.resukisu），两者都算绕过；
+	 * 包名之后的文件路径里带 emoji 之类则放行。
+	 */
+	n = (int)(hit - norm) + 12;	/* 指向 "Android/data" 末尾 */
+	if (norm[n] == '/')
+		n++;
+	while (norm[n] && norm[n] != '/')
+		n++;
+
+	return first_skip <= n;
 }
 
 /* ------------------------------------------------------------------
