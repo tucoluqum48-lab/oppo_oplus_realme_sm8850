@@ -885,7 +885,7 @@ diff --git a/fs/namei.c b/fs/namei.c
 +#include <linux/susfs_hide_modules.h>
 +#endif
  #include <linux/filelock.h>
-@@ -160,9 +160,17 @@
+@@ -160,9 +160,21 @@
  		/* The empty path is special. */
  		if (!(flags & LOOKUP_EMPTY)) {
  			__putname(result);
@@ -894,10 +894,14 @@ diff --git a/fs/namei.c b/fs/namei.c
  	}
 +
 +#ifdef CONFIG_KSU_SUSFS
-+	/* 零宽字符绕过 Android/data 隔离：命中就当作非法路径 */
++	/*
++	 * 零宽字符 / 可忽略码点绕过 Android/data 隔离：
++	 * 返回 -ENOENT 而不是 -EINVAL —— 前者与"路径不存在"无法区分，
++	 * 后者会让检测方看出"内核主动拒绝了这条路径"。
++	 */
 +	if (unlikely(susfs_is_zwc_bypass_path(kname, len))) {
 +		__putname(result);
-+		return ERR_PTR(-EINVAL);
++		return ERR_PTR(-ENOENT);
 +	}
 +#endif
  
