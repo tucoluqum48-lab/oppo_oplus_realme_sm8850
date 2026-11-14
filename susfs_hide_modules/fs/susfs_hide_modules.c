@@ -37,6 +37,9 @@
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
 #include <linux/capability.h>
+#include <linux/notifier.h>	/* register_module_notifier */
+#include <linux/dcache.h>	/* DT_* */
+#include <linux/slab.h>
 #include <linux/susfs_hide_modules.h>
 
 /*
@@ -69,6 +72,9 @@ static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sysfs_marked = ATOMIC_INIT(0);
+static atomic_t ko_n_probe_hits = ATOMIC_INIT(0);
+static atomic_t ko_n_probe_miss = ATOMIC_INIT(0);
+static atomic_t ko_n_notify = ATOMIC_INIT(0);
 
 /* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
 /*
@@ -292,6 +298,275 @@ static void susfs_hide_rt_clear(void)
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 }
 
+/* ------------------------------------------------------------------
+ * 自动发现：开机扫目录建缓存 + 模块加载通知实时探测
+ *
+ * 目标：不依赖用户态脚本，也没有任何进程。
+ *   · 开机：BFS 扫 /data/adb 最多 3 层，记下可能放 .ko 的目录（上限 64）
+ *   · 之后：遍历这些目录里的 *.ko，算出模块名登记
+ *   · 运行中：register_module_notifier 捕获 insmod，按名字回探路径
+ *
+ * 失败策略：任何一步失败都只是"不隐藏"，不影响系统。
+ * ------------------------------------------------------------------ */
+
+#define KO_DIR_MAX	64
+#define KO_PATH_LEN	96
+#define KO_PEND_MAX	16
+#define KO_SCAN_DEPTH	3
+
+static char ko_dirs[KO_DIR_MAX][KO_PATH_LEN];
+static int  ko_dir_n;
+static bool ko_cache_ok;
+static DEFINE_MUTEX(ko_cache_lock);
+
+static char ko_pend[KO_PEND_MAX][MODULE_NAME_LEN];
+static int  ko_pend_n;
+static DEFINE_SPINLOCK(ko_pend_lock);
+
+struct ko_bfs_ent {
+	char path[KO_PATH_LEN];
+	u8   depth;
+};
+static struct ko_bfs_ent ko_queue[KO_DIR_MAX];
+static int ko_q_head, ko_q_tail;
+
+struct ko_dir_iter {
+	struct dir_context ctx;
+	const char *parent;
+	u8 depth;
+};
+
+static bool ko_is_vendor_module(const char *name)
+{
+	char path[KO_PATH_LEN];
+	struct path p;
+
+	if (scnprintf(path, sizeof(path), "/vendor/lib/modules/%s.ko", name) >= sizeof(path))
+		return false;
+	if (kern_path(path, 0, &p) == 0) {
+		path_put(&p);
+		return true;
+	}
+	return false;
+}
+
+static int ko_cache_add(const char *path)
+{
+	int i;
+
+	for (i = 0; i < ko_dir_n; i++)
+		if (!strcmp(ko_dirs[i], path))
+			return 0;
+	if (ko_dir_n >= KO_DIR_MAX)
+		return -ENOSPC;
+	strscpy(ko_dirs[ko_dir_n], path, KO_PATH_LEN);
+	ko_dir_n++;
+	return 0;
+}
+
+static struct file *ko_open_dir(const char *path)
+{
+	return filp_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+}
+
+/* 收集子目录进 BFS 队列 */
+static bool ko_dirs_actor(struct dir_context *ctx, const char *name, int namelen,
+			  loff_t pos, u64 ino, unsigned type)
+{
+	struct ko_dir_iter *it = container_of(ctx, struct ko_dir_iter, ctx);
+	struct ko_bfs_ent *e;
+	int len;
+
+	if (type != DT_DIR || namelen <= 0 || name[0] == '.')
+		return true;
+	if (ko_q_tail >= KO_DIR_MAX)
+		return false;
+
+	e = &ko_queue[ko_q_tail];
+	len = scnprintf(e->path, KO_PATH_LEN, "%s/%.*s", it->parent, namelen, name);
+	if (len <= 0 || len >= KO_PATH_LEN)
+		return true;
+	e->depth = it->depth + 1;
+	ko_q_tail++;
+	return true;
+}
+
+/* 收集目录里的 *.ko，按文件名算出模块名并登记 */
+static bool ko_files_actor(struct dir_context *ctx, const char *name, int namelen,
+			   loff_t pos, u64 ino, unsigned type)
+{
+	char mod[MODULE_NAME_LEN];
+	int i, n = 0;
+
+	if (type != DT_REG && type != DT_UNKNOWN)
+		return true;
+	if (namelen <= 3 || strncmp(name + namelen - 3, ".ko", 3))
+		return true;
+
+	for (i = 0; i < namelen - 3 && n < MODULE_NAME_LEN - 1; i++)
+		mod[n++] = (name[i] == '-') ? '_' : name[i];
+	mod[n] = '\0';
+	if (n == 0 || ko_is_vendor_module(mod))
+		return true;
+
+	(void)susfs_hide_rt_add(mod);
+	return true;
+}
+
+/* 调用者须持有 ko_cache_lock */
+static void ko_cache_build_locked(void)
+{
+	struct ko_dir_iter it;
+	struct file *f;
+
+	ko_dir_n = 0;
+	ko_q_head = 0;
+	ko_q_tail = 0;
+
+	strscpy(ko_queue[0].path, "/data/adb", KO_PATH_LEN);
+	ko_queue[0].depth = 0;
+	ko_q_tail = 1;
+
+	while (ko_q_head < ko_q_tail) {
+		struct ko_bfs_ent e = ko_queue[ko_q_head++];
+
+		if (ko_cache_add(e.path))
+			break;
+		if (e.depth >= KO_SCAN_DEPTH)
+			continue;
+
+		f = ko_open_dir(e.path);
+		if (IS_ERR(f))
+			continue;
+		memset(&it, 0, sizeof(it));
+		it.ctx.actor = ko_dirs_actor;
+		it.parent = e.path;
+		it.depth = e.depth;
+		iterate_dir(f, &it.ctx);
+		filp_close(f, NULL);
+	}
+}
+
+/* 调用者须持有 ko_cache_lock */
+static void ko_cache_ensure_locked(void)
+{
+	if (ko_cache_ok)
+		return;
+	ko_cache_build_locked();
+	ko_cache_ok = (ko_dir_n > 0);
+}
+
+static bool ko_probe_name(const char *name)
+{
+	char path[KO_PATH_LEN];
+	struct path p;
+	int i;
+
+	for (i = 0; i < ko_dir_n; i++) {
+		if (scnprintf(path, sizeof(path), "%s/%s.ko", ko_dirs[i], name) >= sizeof(path))
+			continue;
+		if (kern_path(path, 0, &p) == 0) {
+			path_put(&p);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* 开机扫一遍缓存目录里的 *.ko */
+static void ko_boot_scan(void)
+{
+	struct dir_context ctx;
+	struct file *f;
+	int i;
+
+	mutex_lock(&ko_cache_lock);
+	ko_cache_ensure_locked();
+	for (i = 0; i < ko_dir_n; i++) {
+		f = ko_open_dir(ko_dirs[i]);
+		if (IS_ERR(f))
+			continue;
+		memset(&ctx, 0, sizeof(ctx));
+		ctx.actor = ko_files_actor;
+		iterate_dir(f, &ctx);
+		filp_close(f, NULL);
+	}
+	mutex_unlock(&ko_cache_lock);
+}
+
+static void ko_probe_work_fn(struct work_struct *w)
+{
+	char names[KO_PEND_MAX][MODULE_NAME_LEN];
+	unsigned long flags;
+	int i, n;
+
+	spin_lock_irqsave(&ko_pend_lock, flags);
+	n = ko_pend_n;
+	if (n)
+		memcpy(names, ko_pend, sizeof(names[0]) * (size_t)n);
+	ko_pend_n = 0;
+	spin_unlock_irqrestore(&ko_pend_lock, flags);
+	if (!n)
+		return;
+
+	mutex_lock(&ko_cache_lock);
+	ko_cache_ensure_locked();
+	for (i = 0; i < n; i++) {
+		if (ko_is_vendor_module(names[i]))
+			continue;
+		if (ko_probe_name(names[i])) {
+			atomic_inc(&ko_n_probe_hits);
+			(void)susfs_hide_rt_add(names[i]);
+		} else {
+			atomic_inc(&ko_n_probe_miss);
+		}
+	}
+	mutex_unlock(&ko_cache_lock);
+}
+static DECLARE_WORK(ko_probe_work, ko_probe_work_fn);
+
+static int ko_module_notify(struct notifier_block *nb, unsigned long event, void *data)
+{
+	struct module *mod = data;
+	unsigned long flags;
+	int i;
+
+	if (event != MODULE_STATE_COMING || !mod || !mod->name[0])
+		return NOTIFY_DONE;
+
+	atomic_inc(&ko_n_notify);
+
+	/* notifier 里处在模块加载上下文（持有 module_mutex），只入队不做事 */
+	spin_lock_irqsave(&ko_pend_lock, flags);
+	for (i = 0; i < ko_pend_n; i++) {
+		if (!strcmp(ko_pend[i], mod->name)) {
+			spin_unlock_irqrestore(&ko_pend_lock, flags);
+			return NOTIFY_DONE;
+		}
+	}
+	if (ko_pend_n < KO_PEND_MAX)
+		strscpy(ko_pend[ko_pend_n++], mod->name, MODULE_NAME_LEN);
+	spin_unlock_irqrestore(&ko_pend_lock, flags);
+
+	schedule_work(&ko_probe_work);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block ko_module_nb = {
+	.notifier_call = ko_module_notify,
+};
+
+static void ko_boot_work_fn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(ko_boot_dw, ko_boot_work_fn);
+static int ko_boot_rounds;
+
+static void ko_boot_work_fn(struct work_struct *w)
+{
+	ko_boot_scan();
+	if (!ko_cache_ok && ++ko_boot_rounds < 4)
+		schedule_delayed_work(&ko_boot_dw, 15 * HZ);
+}
+
 static int susfs_hide_show(struct seq_file *m, void *v)
 {
 	unsigned long flags;
@@ -315,6 +590,11 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 		   atomic_read(&susfs_n_sym_skipped),
 		   atomic_read(&susfs_n_symname_skipped),
 		   atomic_read(&susfs_n_sysfs_marked));
+	seq_printf(m, "auto: dirs=%d cache=%s probe_hits=%d probe_miss=%d notify=%d\n",
+		   ko_dir_n, ko_cache_ok ? "ok" : "no",
+		   atomic_read(&ko_n_probe_hits),
+		   atomic_read(&ko_n_probe_miss),
+		   atomic_read(&ko_n_notify));
 
 	return 0;
 }
@@ -384,6 +664,10 @@ static int __init susfs_hide_modules_init(void)
 		pr_warn("susfs_hide_modules: /proc node not created\n");
 	/* 开机后模块才 insmod，这里补几轮 /sys/module 规则 */
 	schedule_delayed_work(&susfs_hide_sysfs_dw, 10 * HZ);
+
+	/* 自动发现：insmod 时立即探测，开机 10 秒后再整体扫一遍 */
+	register_module_notifier(&ko_module_nb);
+	schedule_delayed_work(&ko_boot_dw, 10 * HZ);
 	return 0;
 }
 /* late_initcall：确保 procfs 的 root 已就绪再建节点 */
