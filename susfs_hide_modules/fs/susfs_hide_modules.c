@@ -97,6 +97,32 @@ static void susfs_hide_mark_path(const char *path, bool hide)
 	path_put(&p);
 }
 
+/*
+ * 控制节点自身：procfs 的 inode 是会被回收的，只置位不持引用的话，
+ * 等 inode 被 evict，下一次 lookup 生成的新 inode 上没有位，隐藏就失效
+ * （实测：cat 得到 EACCES 而不是 ENOENT，ls /proc 还能看到名字）。
+ * 这里 ihold 住那份 inode，让位一直在。
+ */
+static struct inode *susfs_node_held;
+
+static void susfs_hide_node_hold(void)
+{
+	struct path p;
+	struct inode *inode;
+
+	if (susfs_node_held)
+		return;
+	if (kern_path("/proc/susfs_hide_modules", LOOKUP_FOLLOW, &p))
+		return;
+	inode = d_backing_inode(p.dentry);
+	if (inode && inode->i_mapping) {
+		ihold(inode);
+		set_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
+		susfs_node_held = inode;
+	}
+	path_put(&p);
+}
+
 /* /sys/module/<name> 的包装 */
 static void susfs_hide_sysfs_mark(const char *name, bool hide)
 {
@@ -114,7 +140,7 @@ static void susfs_hide_sysfs_sync(void)
 	unsigned long flags;
 
 	/* 控制节点自身也要藏：名字出现在 ls /proc 里就是线索 */
-	susfs_hide_mark_path("/proc/susfs_hide_modules", true);
+	susfs_hide_node_hold();
 	char rt[SUSFS_HIDE_MODULES_RT_MAX][MODULE_NAME_LEN];
 	int nr, i;
 
@@ -385,7 +411,7 @@ static int __init susfs_hide_modules_init(void)
 	if (!proc_create("susfs_hide_modules", 0600, NULL, &susfs_hide_proc_ops))
 		pr_warn("susfs_hide_modules: /proc node not created\n");
 	else
-		susfs_hide_mark_path("/proc/susfs_hide_modules", true);
+		susfs_hide_node_hold();
 	/* 开机后模块才 insmod，这里补几轮 /sys/module 规则 */
 	schedule_delayed_work(&susfs_hide_sysfs_dw, 10 * HZ);
 	return 0;
