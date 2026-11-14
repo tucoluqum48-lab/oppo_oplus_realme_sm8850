@@ -390,7 +390,8 @@ static int susfs_hide_open(struct inode *inode, struct file *file)
 static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 				size_t count, loff_t *ppos)
 {
-	char cmd[128], *op, *arg;
+	/* 1024 够放 ~160 个 uid（puid 命令一次性下发整份名单） */
+	char cmd[1024], *op, *arg;
 	int ret;
 
 	if (!capable(CAP_SYS_ADMIN))
