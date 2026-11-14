@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,392 @@
+@@ -0,0 +1,457 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -84,6 +84,7 @@ index 000000000..0000000
 +static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
 +static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
 +static atomic_t susfs_n_sysfs_marked = ATOMIC_INIT(0);
++static atomic_t prio_uid_cnt = ATOMIC_INIT(0);
 +
 +/* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
 +/*
@@ -307,6 +308,65 @@ index 000000000..0000000
 +	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 +}
 +
++/* ------------------------------------------------------------------
++ * priority uid filter
++ *
++ * 目的：堵住"通过优先级相关 syscall 枚举运行中 app"这条路。
++ *   getpriority/setpriority/ioprio_get/ioprio_set 都接受一个 uid 参数，
++ *   返回该 uid 下进程的信息，从而绕开 hidepid 判断某个 app 是否在跑。
++ *
++ * 做法：维护一份 app uid 位图（10000-19999），被过滤的 uid 让调用方
++ *       得到 -ESRCH，和"该 uid 没有进程"完全一样。
++ *
++ * 配置：echo "puid 10335 10337 ..." > /proc/oplus_mem_zone
++ *       echo "puid clear"            > /proc/oplus_mem_zone
++ * ------------------------------------------------------------------ */
++
++#define PRIO_UID_MIN	10000
++#define PRIO_UID_MAX	19999
++#define PRIO_UID_NUM	(PRIO_UID_MAX - PRIO_UID_MIN + 1)
++
++static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);
++static DEFINE_SPINLOCK(prio_uid_lock);
++
++bool susfs_prio_uid_filtered(u32 uid)
++{
++	u32 app = uid % 100000;
++
++	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
++		return false;
++	if (!atomic_read(&prio_uid_cnt))
++		return false;		/* 默认空表：一次 atomic 读就返回 */
++	return test_bit((unsigned int)(app - PRIO_UID_MIN), prio_uid_bits);
++}
++
++static void susfs_hide_prio_set(char *arg)
++{
++	unsigned long flags;
++	char *tok, *p = arg;
++	u32 uid;
++
++	spin_lock_irqsave(&prio_uid_lock, flags);
++	bitmap_zero(prio_uid_bits, PRIO_UID_NUM);
++	atomic_set(&prio_uid_cnt, 0);
++
++	if (arg) {
++		while ((tok = strsep(&p, " ,\t")) != NULL) {
++			tok = skip_spaces(tok);
++			if (!*tok)
++				continue;
++			if (kstrtou32(tok, 10, &uid))
++				continue;
++			if (uid < PRIO_UID_MIN || uid > PRIO_UID_MAX)
++				continue;
++			if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
++					      prio_uid_bits))
++				atomic_inc(&prio_uid_cnt);
++		}
++	}
++	spin_unlock_irqrestore(&prio_uid_lock, flags);
++}
++
 +static int susfs_hide_show(struct seq_file *m, void *v)
 +{
 +	unsigned long flags;
@@ -330,6 +390,7 @@ index 000000000..0000000
 +		   atomic_read(&susfs_n_sym_skipped),
 +		   atomic_read(&susfs_n_symname_skipped),
 +		   atomic_read(&susfs_n_sysfs_marked));
++	seq_printf(m, "prio: %d uid\n", atomic_read(&prio_uid_cnt));
 +
 +	return 0;
 +}
@@ -372,6 +433,10 @@ index 000000000..0000000
 +		susfs_hide_rt_clear();
 +		return count;
 +	}
++	if (!strcmp(op, "puid")) {
++		susfs_hide_prio_set(arg);
++		return count;
++	}
 +	if (!strcmp(op, "add")) {
 +		ret = susfs_hide_rt_add(arg);
 +		return ret ? ret : count;
@@ -410,7 +475,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/include/linux/susfs_hide_modules.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,45 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _LINUX_SUSFS_HIDE_MODULES_H
 +#define _LINUX_SUSFS_HIDE_MODULES_H
@@ -430,6 +495,9 @@ index 000000000..0000000
 +bool susfs_hide_module_name(const char *name);
 +bool susfs_hide_module_symbol(const char *module_name);
 +bool susfs_hide_symbol_name(const char *name);
++
++/* priority uid filter：kernel/sys.c 与 block/ioprio.c 会调用 */
++bool susfs_prio_uid_filtered(u32 uid);
 +#else
 +static inline bool susfs_hide_module_name(const char *name)
 +{
@@ -442,6 +510,11 @@ index 000000000..0000000
 +}
 +
 +static inline bool susfs_hide_symbol_name(const char *name)
++{
++	return false;
++}
++
++static inline bool susfs_prio_uid_filtered(u32 uid)
 +{
 +	return false;
 +}
@@ -539,3 +612,106 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +	    current_uid().val != 0)
 +		return true;
  	if (!susfs_is_current_proc_umounted_app()) {
+diff --git a/kernel/sys.c b/kernel/sys.c
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -225,5 +225,9 @@
+ 	return error;
+ }
+ 
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs_hide_modules.h>
++#endif
++
+ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
+ {
+@@ -259,12 +259,17 @@
+ 		do_each_pid_thread(pgrp, PIDTYPE_PGID, p) {
+ 			error = set_one_prio(p, niceval, error);
+ 		} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);
+ 		read_unlock(&tasklist_lock);
+ 		break;
+ 	case PRIO_USER:
+ 		uid = make_kuid(cred->user_ns, who);
+ 		user = cred->user;
+ 		if (!who)
+ 			uid = cred->uid;
+ 		else if (!uid_eq(uid, cred->uid)) {
++#ifdef CONFIG_KSU_SUSFS
++			if (cred->uid.val >= 10000 &&
++			    susfs_prio_uid_filtered(uid.val))
++				goto out_unlock;
++#endif
+ 			user = find_user(uid);
+@@ -326,14 +326,19 @@
+ 		do_each_pid_thread(pgrp, PIDTYPE_PGID, p) {
+ 			niceval = nice_to_rlimit(task_nice(p));
+ 			if (niceval > retval)
+ 				retval = niceval;
+ 		} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);
+ 		read_unlock(&tasklist_lock);
+ 		break;
+ 	case PRIO_USER:
+ 		uid = make_kuid(cred->user_ns, who);
+ 		user = cred->user;
+ 		if (!who)
+ 			uid = cred->uid;
+ 		else if (!uid_eq(uid, cred->uid)) {
++#ifdef CONFIG_KSU_SUSFS
++			if (cred->uid.val >= 10000 &&
++			    susfs_prio_uid_filtered(uid.val))
++				goto out_unlock;
++#endif
+ 			user = find_user(uid);
+diff --git a/block/ioprio.c b/block/ioprio.c
+--- a/block/ioprio.c
++++ b/block/ioprio.c
+@@ -66,4 +66,8 @@
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs_hide_modules.h>
++#endif
++
+ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
+@@ -109,11 +109,20 @@
+ 		case IOPRIO_WHO_USER:
+ 			uid = make_kuid(current_user_ns(), who);
+ 			if (!uid_valid(uid))
+ 				break;
+ 			if (!who)
+ 				user = current_user();
+ 			else
++#ifdef CONFIG_KSU_SUSFS
++			{
++				if (current_uid().val >= 10000 &&
++				    susfs_prio_uid_filtered(uid.val))
++					break;
+ 				user = find_user(uid);
++			}
++#else
++				user = find_user(uid);
++#endif
+ 
+ 			if (!user)
+ 				break;
+@@ -219,9 +219,18 @@
+ 		case IOPRIO_WHO_USER:
+ 			uid = make_kuid(current_user_ns(), who);
+ 			if (!who)
+ 				user = current_user();
+ 			else
++#ifdef CONFIG_KSU_SUSFS
++			{
++				if (current_uid().val >= 10000 &&
++				    susfs_prio_uid_filtered(uid.val))
++					break;
+ 				user = find_user(uid);
++			}
++#else
++				user = find_user(uid);
++#endif
+ 
+ 			if (!user)
+ 				break;
