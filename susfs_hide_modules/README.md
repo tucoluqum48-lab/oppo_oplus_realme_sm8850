@@ -334,12 +334,13 @@ if (unlikely(susfs_is_zwc_bypass_path(kname, len))) {
 ```
 1. 路径全 ASCII → 直接放行（绝大多数路径）
 2. 丢掉所有非 ASCII 字节，得到 norm
-3. norm 里出现 "Android/data"，且非 ASCII 字节落在它之前（含）
-   → 判定为绕过，返回 -EINVAL
+3. norm 里出现 "Android/data"，且非 ASCII 字节落在
+   "Android/data" + 紧跟的包名段 之内/之前 → 判定为绕过，返回 -EINVAL
 ```
 
-所以零宽字符、可忽略码点、变体选择符、bidi 控制符、甚至中文目录名
-插在 `Android/data` 之前，统统拦得住。
+所以零宽字符、可忽略码点、变体选择符、bidi 控制符、中文目录名，
+无论插在 `Android/data` 之前还是在包名段里（`com.resukisu​.resukisu`），
+统统拦得住。
 
 **不误伤**：`Android/data/com.foo/files/👨‍👩‍👧.png` 里 emoji 在
 `Android/data` 之后，放行。
