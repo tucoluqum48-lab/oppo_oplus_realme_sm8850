@@ -32,7 +32,6 @@
 #include <linux/fs.h>		/* set_bit + inode->i_mapping */
 #include <linux/namei.h>	/* kern_path */
 #include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
-#include <linux/susfs_def.h>	/* AS_FLAGS_SUS_PATH */
 #include <linux/susfs_hide_modules.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
