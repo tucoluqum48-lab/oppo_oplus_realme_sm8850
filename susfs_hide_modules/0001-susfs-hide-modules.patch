@@ -4,7 +4,7 @@ Subject: [PATCH] susfs: hide selected kernel modules from /proc/modules and /pro
 内建版 hide_modules，等价于 susfs4ksu-for-lkm 的可加载模块实现：
   - kernel/module/procfs.c  m_show()  按 module->name 跳过整行（所有读者，含 root）
   - kernel/kallsyms.c       s_show()  按 module_name 跳过整行（模块符号一并消失）
-  - /sys/module/<name> 由用户态 ksu_susfs add_sus_path 负责（非 root ENOENT，root 可见）
+  - /sys/module/<name> 由本模块置 strict 位，对所有非 root 生效（root 仍可见）
 
 前置：susfs 主补丁 50_add_susfs_in_gki-*.patch 已应用（本补丁排在其后）。
 diff --git a/fs/susfs_hide_modules.c b/fs/susfs_hide_modules.c
@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,375 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -48,6 +48,7 @@ index 000000000..0000000
 +#include <linux/namei.h>	/* kern_path */
 +#include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
 +#include <linux/susfs_def.h>	/* AS_FLAGS_SUS_PATH */
++#include <linux/susfs_hide_modules.h>
 +#include <linux/proc_fs.h>
 +#include <linux/seq_file.h>
 +#include <linux/uaccess.h>
@@ -97,10 +98,10 @@ index 000000000..0000000
 +	inode = d_backing_inode(p.dentry);
 +	if (inode && inode->i_mapping) {
 +		if (hide) {
-+			set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
++			set_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
 +			atomic_inc(&susfs_n_sysfs_marked);
 +		} else {
-+			clear_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
++			clear_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
 +		}
 +	}
 +	path_put(&p);
@@ -392,12 +393,22 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/include/linux/susfs_hide_modules.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,38 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _LINUX_SUSFS_HIDE_MODULES_H
 +#define _LINUX_SUSFS_HIDE_MODULES_H
 +
 +#include <linux/types.h>
++#include <linux/susfs_def.h>
++
++/*
++ * 比 SUSFS 的 AS_FLAGS_SUS_PATH 更狠的一位：sus_path 的原始判定要求
++ * "当前进程处于 umounted 状态"，shell/system 这类进程会绕过；
++ * hide_modules 给自己标记的路径改用这一位，对所有非 root 生效。
++ */
++#ifndef AS_FLAGS_SUS_PATH_STRICT
++#define AS_FLAGS_SUS_PATH_STRICT 40
++#endif
 +
 +#ifdef CONFIG_KSU_SUSFS
 +bool susfs_hide_module_name(const char *name);
@@ -492,3 +503,19 @@ diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
 +#endif
 +
  	value = iter->show_value ? (void *)iter->value : NULL;
+diff --git a/fs/susfs.c b/fs/susfs.c
+--- a/fs/susfs.c
++++ b/fs/susfs.c
+@@ -189,5 +189,12 @@
+ bool susfs_is_inode_sus_path(struct inode *inode)
+ #endif
+ {
+ 	struct fuse_inode *fi = NULL;
++	/* strict 位：hide_modules 给自己标记的路径，对所有非 root 生效
++	 * （上游 sus_path 只对当前进程处于 umounted 状态时生效，
++	 *   shell / system 这类非 app 进程会绕过，这里补上） */
++	if (inode && inode->i_mapping &&
++	    test_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags) &&
++	    current_uid().val != 0)
++		return true;
+ 	if (!susfs_is_current_proc_umounted_app()) {
