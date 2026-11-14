@@ -17,6 +17,9 @@
 bool susfs_hide_module_name(const char *name);
 bool susfs_hide_module_symbol(const char *module_name);
 bool susfs_hide_symbol_name(const char *name);
+
+/* priority uid filter：kernel/sys.c 与 block/ioprio.c 会调用 */
+bool susfs_prio_uid_filtered(u32 uid);
 #else
 static inline bool susfs_hide_module_name(const char *name)
 {
@@ -29,6 +32,11 @@ static inline bool susfs_hide_module_symbol(const char *module_name)
 }
 
 static inline bool susfs_hide_symbol_name(const char *name)
+{
+	return false;
+}
+
+static inline bool susfs_prio_uid_filtered(u32 uid)
 {
 	return false;
 }
