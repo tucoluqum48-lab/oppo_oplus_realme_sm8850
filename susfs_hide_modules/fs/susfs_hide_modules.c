@@ -33,6 +33,7 @@
 #include <linux/namei.h>	/* kern_path */
 #include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
 #include <linux/susfs_def.h>	/* AS_FLAGS_SUS_PATH */
+#include <linux/susfs_hide_modules.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
@@ -82,10 +83,10 @@ static void susfs_hide_sysfs_mark(const char *name, bool hide)
 	inode = d_backing_inode(p.dentry);
 	if (inode && inode->i_mapping) {
 		if (hide) {
-			set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+			set_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
 			atomic_inc(&susfs_n_sysfs_marked);
 		} else {
-			clear_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+			clear_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
 		}
 	}
 	path_put(&p);
