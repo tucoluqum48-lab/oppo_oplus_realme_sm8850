@@ -3,7 +3,6 @@
 #define _LINUX_SUSFS_HIDE_MODULES_H
 
 #include <linux/types.h>
-#include <linux/susfs_def.h>
 
 /*
  * 比 SUSFS 的 AS_FLAGS_SUS_PATH 更狠的一位：sus_path 的原始判定要求
