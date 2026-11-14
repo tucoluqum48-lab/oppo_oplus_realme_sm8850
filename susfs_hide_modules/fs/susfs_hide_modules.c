@@ -294,6 +294,96 @@ static void susfs_hide_rt_clear(void)
 }
 
 /* ------------------------------------------------------------------
+ * 零宽字符路径拦截（CVE-2024-43093 类绕过）
+ *
+ * 背景：/storage/emulated/0/Android/data/<pkg> 的访问控制靠字符串匹配，
+ *       在路径里插入零宽字符可以让匹配失败、却仍解析到真实目录
+ *       → 检测方据此能读到被 HMA 隐藏的 app 的目录，反推包名。
+ *
+ * 做法：在 getname_flags() 里检查路径。
+ *       只有当"可忽略字符出现在 Android/data 之前"才拦，
+ *       这样 Android/data/xxx/files/👨‍👩‍👧.png 这类合法文件名不受影响。
+ * ------------------------------------------------------------------ */
+
+struct susfs_zwc_seq {
+	u8 b0, b1, b2;
+};
+
+static const struct susfs_zwc_seq susfs_zwc_seqs[] = {
+	{0xE2, 0x80, 0x8B},	/* U+200B ZERO WIDTH SPACE */
+	{0xE2, 0x80, 0x8C},	/* U+200C ZWNJ */
+	{0xE2, 0x80, 0x8D},	/* U+200D ZWJ */
+	{0xE2, 0x80, 0x8E},	/* U+200E LRM */
+	{0xE2, 0x80, 0x8F},	/* U+200F RLM */
+	{0xE2, 0x81, 0xA0},	/* U+2060 WORD JOINER */
+	{0xE2, 0x81, 0xA1},	/* U+2061 */
+	{0xE2, 0x81, 0xA2},	/* U+2062 */
+	{0xE2, 0x81, 0xA3},	/* U+2063 */
+	{0xE2, 0x81, 0xA4},	/* U+2064 */
+	{0xE1, 0xA0, 0x8E},	/* U+180E MONGOLIAN VOWEL SEPARATOR */
+	{0xE3, 0x85, 0xA4},	/* U+3164 HANGUL FILLER */
+	{0xEF, 0xBB, 0xBF},	/* U+FEFF BOM */
+};
+
+#define SUSFS_ZWC_NORM_MAX	256
+
+bool susfs_is_zwc_bypass_path(const char *name, int len)
+{
+	char norm[SUSFS_ZWC_NORM_MAX];
+	int i, k, n = 0, first_skip = -1;
+	bool non_ascii = false;
+	const char *hit;
+
+	if (!name || len <= 0)
+		return false;
+
+	/* 全 ASCII 不可能命中，绝大多数路径在这里就返回 */
+	for (i = 0; i < len; i++) {
+		if ((unsigned char)name[i] >= 0x80) {
+			non_ascii = true;
+			break;
+		}
+	}
+	if (!non_ascii)
+		return false;
+
+	for (i = 0; i < len; ) {
+		bool skipped = false;
+
+		for (k = 0; k < ARRAY_SIZE(susfs_zwc_seqs); k++) {
+			if (i + 2 < len &&
+			    (u8)name[i] == susfs_zwc_seqs[k].b0 &&
+			    (u8)name[i + 1] == susfs_zwc_seqs[k].b1 &&
+			    (u8)name[i + 2] == susfs_zwc_seqs[k].b2) {
+				if (first_skip < 0)
+					first_skip = n;
+				i += 3;
+				skipped = true;
+				break;
+			}
+		}
+		if (skipped)
+			continue;
+		if (n >= SUSFS_ZWC_NORM_MAX - 1)
+			return false;	/* 太长就不管了，正常路径不会到这里 */
+		norm[n++] = name[i++];
+	}
+	norm[n] = '\0';
+
+	if (first_skip < 0)
+		return false;		/* 没有可忽略字符 */
+
+	hit = strstr(norm, "Android/data");
+	if (!hit)
+		return false;
+	/* 只有落在 "Android/data" 之前（含）的可忽略字符才算绕过 */
+	if (first_skip > (int)(hit - norm) + 12)
+		return false;
+
+	return true;
+}
+
+/* ------------------------------------------------------------------
  * priority uid filter
  *
  * 目的：堵住"通过优先级相关 syscall 枚举运行中 app"这条路。
