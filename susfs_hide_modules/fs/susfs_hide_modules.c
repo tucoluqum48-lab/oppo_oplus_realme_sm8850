@@ -29,6 +29,10 @@
 #include <linux/string.h>
 #include <linux/spinlock.h>
 #include <linux/atomic.h>
+#include <linux/fs.h>		/* set_bit + inode->i_mapping */
+#include <linux/namei.h>	/* kern_path */
+#include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
+#include <linux/susfs_def.h>	/* AS_FLAGS_SUS_PATH */
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
@@ -56,8 +60,70 @@ static DEFINE_SPINLOCK(susfs_hidden_lock);
 static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
+static atomic_t susfs_n_sysfs_marked = ATOMIC_INIT(0);
 
 /* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
+/*
+ * /sys/module/<name> 的隐藏：跟 SUSFS 的 sus_path 用同一个位。
+ * 内置 SUSFS 只对外提供 susfs_add_sus_path(void __user **)（要用户态指针），
+ * 内核态拿不到；但隐藏动作本身只是置位，直接做即可。
+ */
+static void susfs_hide_sysfs_mark(const char *name, bool hide)
+{
+	char path[64];
+	struct inode *inode;
+	struct path p;
+
+	if (!name || !name[0])
+		return;
+	snprintf(path, sizeof(path), "/sys/module/%s", name);
+	if (kern_path(path, LOOKUP_FOLLOW, &p))
+		return;		/* 模块还没加载，下次再试 */
+	inode = d_backing_inode(p.dentry);
+	if (inode && inode->i_mapping) {
+		if (hide) {
+			set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+			atomic_inc(&susfs_n_sysfs_marked);
+		} else {
+			clear_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+		}
+	}
+	path_put(&p);
+}
+
+/* 把名单里所有名字的 /sys/module 目录同步一遍 */
+static void susfs_hide_sysfs_sync(void)
+{
+	unsigned long flags;
+	char rt[SUSFS_HIDE_MODULES_RT_MAX][MODULE_NAME_LEN];
+	int nr, i;
+
+	for (i = 0; i < ARRAY_SIZE(susfs_hidden_modules); i++)
+		susfs_hide_sysfs_mark(susfs_hidden_modules[i], true);
+
+	spin_lock_irqsave(&susfs_hidden_lock, flags);
+	nr = susfs_hidden_rt_nr;
+	if (nr > SUSFS_HIDE_MODULES_RT_MAX)
+		nr = SUSFS_HIDE_MODULES_RT_MAX;
+	memcpy(rt, susfs_hidden_rt, sizeof(rt[0]) * nr);
+	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+
+	for (i = 0; i < nr; i++)
+		susfs_hide_sysfs_mark(rt[i], true);
+}
+
+/* 模块可能在开机后才 insmod：补几轮 */
+static void susfs_hide_sysfs_work(struct work_struct *w);
+static DECLARE_DELAYED_WORK(susfs_hide_sysfs_dw, susfs_hide_sysfs_work);
+static int susfs_hide_sysfs_rounds;
+
+static void susfs_hide_sysfs_work(struct work_struct *w)
+{
+	susfs_hide_sysfs_sync();
+	if (++susfs_hide_sysfs_rounds < 4)
+		schedule_delayed_work(&susfs_hide_sysfs_dw, 15 * HZ);
+}
+
 static bool susfs_hide_match(const char *name)
 {
 	unsigned long flags;
@@ -167,6 +233,8 @@ static int susfs_hide_rt_add(const char *name)
 	strscpy(susfs_hidden_rt[susfs_hidden_rt_nr++], name, MODULE_NAME_LEN);
 out_unlock:
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
+	if (!ret)
+		susfs_hide_sysfs_mark(name, true);	/* 进程上下文，可以 kern_path */
 	return ret;
 }
 
@@ -191,7 +259,8 @@ static int susfs_hide_rt_del(const char *name)
 		}
 	}
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
-
+	if (!ret)
+		susfs_hide_sysfs_mark(name, false);
 	return ret;
 }
 
@@ -223,10 +292,11 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 	seq_puts(m, "\n");
 
-	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d symbolname=%d\n",
+	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d symbolname=%d sysfs_marked=%d\n",
 		   atomic_read(&susfs_n_mod_skipped),
 		   atomic_read(&susfs_n_sym_skipped),
-		   atomic_read(&susfs_n_symname_skipped));
+		   atomic_read(&susfs_n_symname_skipped),
+		   atomic_read(&susfs_n_sysfs_marked));
 
 	return 0;
 }
@@ -294,6 +364,8 @@ static int __init susfs_hide_modules_init(void)
 {
 	if (!proc_create("susfs_hide_modules", 0600, NULL, &susfs_hide_proc_ops))
 		pr_warn("susfs_hide_modules: /proc node not created\n");
+	/* 开机后模块才 insmod，这里补几轮 /sys/module 规则 */
+	schedule_delayed_work(&susfs_hide_sysfs_dw, 10 * HZ);
 	return 0;
 }
 /* late_initcall：确保 procfs 的 root 已就绪再建节点 */
