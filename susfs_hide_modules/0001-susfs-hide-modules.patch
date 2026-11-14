@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,536 @@
+@@ -0,0 +1,609 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -332,6 +332,65 @@ index 000000000..0000000
 + */
 +#define SUSFS_ZWC_NORM_MAX	256
 +
++/*
++ * 第一道：全局拒绝"可忽略码点"
++ *
++ * 这些字符在路径里没有任何正当用途，而 FUSE/MediaProvider 在解析时会忽略它们，
++ * 于是 "Android/data/x" 可以被写成 "Android/data/x"（中间插字符）绕过黑名单。
++ *
++ * 故意不包含：
++ *   U+200D ZWJ   —— emoji 组合（👨‍👩‍👧）会用到
++ *   U+FE0F VS16  —— emoji 变体选择符（💯）会用到
++ */
++struct susfs_zwc_seq {
++	u8 b0, b1, b2;
++	u8 len;
++};
++
++static const struct susfs_zwc_seq susfs_zwc_seqs[] = {
++	{0xC2, 0xAD, 0x00, 2},	/* U+00AD SOFT HYPHEN */
++	{0xCD, 0x8F, 0x00, 2},	/* U+034F COMBINING GRAPHEME JOINER */
++	{0xE1, 0xA0, 0x8B, 3},	/* U+180B */
++	{0xE1, 0xA0, 0x8C, 3},	/* U+180C */
++	{0xE1, 0xA0, 0x8D, 3},	/* U+180D */
++	{0xE1, 0xA0, 0x8E, 3},	/* U+180E MONGOLIAN VOWEL SEPARATOR */
++	{0xE2, 0x80, 0x8B, 3},	/* U+200B ZERO WIDTH SPACE */
++	{0xE2, 0x80, 0x8C, 3},	/* U+200C ZWNJ */
++	{0xE2, 0x80, 0x8E, 3},	/* U+200E LRM */
++	{0xE2, 0x80, 0x8F, 3},	/* U+200F RLM */
++	{0xE2, 0x80, 0xAA, 3},	/* U+202A LRE */
++	{0xE2, 0x80, 0xAB, 3},	/* U+202B RLE */
++	{0xE2, 0x80, 0xAC, 3},	/* U+202C PDF */
++	{0xE2, 0x80, 0xAD, 3},	/* U+202D LRO */
++	{0xE2, 0x80, 0xAE, 3},	/* U+202E RLO */
++	{0xE2, 0x81, 0xA0, 3},	/* U+2060 WORD JOINER */
++	{0xE2, 0x81, 0xA1, 3},	/* U+2061 */
++	{0xE2, 0x81, 0xA2, 3},	/* U+2062 */
++	{0xE2, 0x81, 0xA3, 3},	/* U+2063 */
++	{0xE2, 0x81, 0xA4, 3},	/* U+2064 */
++	{0xE3, 0x85, 0xA4, 3},	/* U+3164 HANGUL FILLER */
++	{0xEF, 0xBB, 0xBF, 3},	/* U+FEFF BOM / ZWNBSP */
++};
++
++/* 命中返回该序列长度，否则 0 */
++static int susfs_zwc_match(const char *name, int left)
++{
++	int k;
++
++	for (k = 0; k < ARRAY_SIZE(susfs_zwc_seqs); k++) {
++		const struct susfs_zwc_seq *q = &susfs_zwc_seqs[k];
++
++		if (q->len > left)
++			continue;
++		if ((u8)name[0] != q->b0 || (u8)name[1] != q->b1)
++			continue;
++		if (q->len == 3 && (u8)name[2] != q->b2)
++			continue;
++		return q->len;
++	}
++	return 0;
++}
++
 +bool susfs_is_zwc_bypass_path(const char *name, int len)
 +{
 +	char norm[SUSFS_ZWC_NORM_MAX];
@@ -342,7 +401,7 @@ index 000000000..0000000
 +	if (!name || len <= 0)
 +		return false;
 +
-+	/* 全 ASCII → 不可能是绕过（绝大多数路径走这条） */
++	/* 全 ASCII → 不可能命中（绝大多数路径走这条） */
 +	for (i = 0; i < len; i++) {
 +		if ((unsigned char)name[i] >= 0x80) {
 +			non_ascii = true;
@@ -352,11 +411,31 @@ index 000000000..0000000
 +	if (!non_ascii)
 +		return false;
 +
-+	/* 只保留 ASCII 字节，记录第一个非 ASCII 字符对应的输出位置 */
++	/*
++	 * 第一道：任何位置出现可忽略码点 → 直接拒绝。
++	 * 这是 KPM（No 0）的做法，也是绕过 Android/data 黑名单的必要条件。
++	 */
++	for (i = 0; i < len; ) {
++		int step = susfs_zwc_match(name + i, len - i);
++
++		if (step) {
++			pr_debug_ratelimited("susfs: zwc path rejected\n");
++			return true;
++		}
++		if ((unsigned char)name[i] < 0x80)
++			i++;
++		else
++			i += 2;		/* 多字节字符，粗略跳过即可（只为省时间） */
++	}
++
++	/*
++	 * 第二道：其它非 ASCII（中文目录名等）出现在
++	 * "Android/data" + 包名段 之内也拒绝。
++	 */
 +	for (i = 0; i < len; i++) {
 +		if ((unsigned char)name[i] < 0x80) {
 +			if (n >= SUSFS_ZWC_NORM_MAX - 1)
-+				return false;	/* 路径过长，不处理 */
++				return false;
 +			norm[n++] = name[i];
 +		} else if (first_skip < 0) {
 +			first_skip = n;
@@ -371,13 +450,7 @@ index 000000000..0000000
 +	if (!hit)
 +		return false;
 +
-+	/*
-+	 * 窗口 = "Android/data" 加上紧跟的包名段。
-+	 * 检测方既可能在 Android/data 之前插字符，也可能插在包名里
-+	 * （例如 com.resukisu​.resukisu），两者都算绕过；
-+	 * 包名之后的文件路径里带 emoji 之类则放行。
-+	 */
-+	n = (int)(hit - norm) + 12;	/* 指向 "Android/data" 末尾 */
++	n = (int)(hit - norm) + 12;
 +	if (norm[n] == '/')
 +		n++;
 +	while (norm[n] && norm[n] != '/')
