@@ -69,6 +69,7 @@ static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sysfs_marked = ATOMIC_INIT(0);
+static atomic_t prio_uid_cnt = ATOMIC_INIT(0);
 
 /* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
 /*
@@ -292,6 +293,65 @@ static void susfs_hide_rt_clear(void)
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 }
 
+/* ------------------------------------------------------------------
+ * priority uid filter
+ *
+ * 目的：堵住"通过优先级相关 syscall 枚举运行中 app"这条路。
+ *   getpriority/setpriority/ioprio_get/ioprio_set 都接受一个 uid 参数，
+ *   返回该 uid 下进程的信息，从而绕开 hidepid 判断某个 app 是否在跑。
+ *
+ * 做法：维护一份 app uid 位图（10000-19999），被过滤的 uid 让调用方
+ *       得到 -ESRCH，和"该 uid 没有进程"完全一样。
+ *
+ * 配置：echo "puid 10335 10337 ..." > /proc/oplus_mem_zone
+ *       echo "puid clear"            > /proc/oplus_mem_zone
+ * ------------------------------------------------------------------ */
+
+#define PRIO_UID_MIN	10000
+#define PRIO_UID_MAX	19999
+#define PRIO_UID_NUM	(PRIO_UID_MAX - PRIO_UID_MIN + 1)
+
+static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);
+static DEFINE_SPINLOCK(prio_uid_lock);
+
+bool susfs_prio_uid_filtered(u32 uid)
+{
+	u32 app = uid % 100000;
+
+	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
+		return false;
+	if (!atomic_read(&prio_uid_cnt))
+		return false;		/* 默认空表：一次 atomic 读就返回 */
+	return test_bit((unsigned int)(app - PRIO_UID_MIN), prio_uid_bits);
+}
+
+static void susfs_hide_prio_set(char *arg)
+{
+	unsigned long flags;
+	char *tok, *p = arg;
+	u32 uid;
+
+	spin_lock_irqsave(&prio_uid_lock, flags);
+	bitmap_zero(prio_uid_bits, PRIO_UID_NUM);
+	atomic_set(&prio_uid_cnt, 0);
+
+	if (arg) {
+		while ((tok = strsep(&p, " ,\t")) != NULL) {
+			tok = skip_spaces(tok);
+			if (!*tok)
+				continue;
+			if (kstrtou32(tok, 10, &uid))
+				continue;
+			if (uid < PRIO_UID_MIN || uid > PRIO_UID_MAX)
+				continue;
+			if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
+					      prio_uid_bits))
+				atomic_inc(&prio_uid_cnt);
+		}
+	}
+	spin_unlock_irqrestore(&prio_uid_lock, flags);
+}
+
 static int susfs_hide_show(struct seq_file *m, void *v)
 {
 	unsigned long flags;
@@ -315,6 +375,7 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 		   atomic_read(&susfs_n_sym_skipped),
 		   atomic_read(&susfs_n_symname_skipped),
 		   atomic_read(&susfs_n_sysfs_marked));
+	seq_printf(m, "prio: %d uid\n", atomic_read(&prio_uid_cnt));
 
 	return 0;
 }
@@ -355,6 +416,10 @@ static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 
 	if (!strcmp(op, "clear") && !arg) {
 		susfs_hide_rt_clear();
+		return count;
+	}
+	if (!strcmp(op, "puid")) {
+		susfs_hide_prio_set(arg);
 		return count;
 	}
 	if (!strcmp(op, "add")) {
