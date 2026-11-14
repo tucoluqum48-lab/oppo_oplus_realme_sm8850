@@ -76,15 +76,13 @@ static atomic_t susfs_n_sysfs_marked = ATOMIC_INIT(0);
  * 内置 SUSFS 只对外提供 susfs_add_sus_path(void __user **)（要用户态指针），
  * 内核态拿不到；但隐藏动作本身只是置位，直接做即可。
  */
-static void susfs_hide_sysfs_mark(const char *name, bool hide)
+static void susfs_hide_mark_path(const char *path, bool hide)
 {
-	char path[64];
 	struct inode *inode;
 	struct path p;
 
-	if (!name || !name[0])
+	if (!path || !path[0])
 		return;
-	snprintf(path, sizeof(path), "/sys/module/%s", name);
 	if (kern_path(path, LOOKUP_FOLLOW, &p))
 		return;		/* 模块还没加载，下次再试 */
 	inode = d_backing_inode(p.dentry);
@@ -99,10 +97,24 @@ static void susfs_hide_sysfs_mark(const char *name, bool hide)
 	path_put(&p);
 }
 
+/* /sys/module/<name> 的包装 */
+static void susfs_hide_sysfs_mark(const char *name, bool hide)
+{
+	char path[64];
+
+	if (!name || !name[0])
+		return;
+	snprintf(path, sizeof(path), "/sys/module/%s", name);
+	susfs_hide_mark_path(path, hide);
+}
+
 /* 把名单里所有名字的 /sys/module 目录同步一遍 */
 static void susfs_hide_sysfs_sync(void)
 {
 	unsigned long flags;
+
+	/* 控制节点自身也要藏：名字出现在 ls /proc 里就是线索 */
+	susfs_hide_mark_path("/proc/susfs_hide_modules", true);
 	char rt[SUSFS_HIDE_MODULES_RT_MAX][MODULE_NAME_LEN];
 	int nr, i;
 
@@ -372,6 +384,8 @@ static int __init susfs_hide_modules_init(void)
 {
 	if (!proc_create("susfs_hide_modules", 0600, NULL, &susfs_hide_proc_ops))
 		pr_warn("susfs_hide_modules: /proc node not created\n");
+	else
+		susfs_hide_mark_path("/proc/susfs_hide_modules", true);
 	/* 开机后模块才 insmod，这里补几轮 /sys/module 规则 */
 	schedule_delayed_work(&susfs_hide_sysfs_dw, 10 * HZ);
 	return 0;
