@@ -43,9 +43,17 @@
  * 编译期名单。名字必须精确匹配 struct module->name，也就是
  *   lsmod 第一列 / cat /proc/modules 第一列（不带 .ko，'-' 已转成 '_'）
  */
+/*
+ * 通用版：编译期名单留空，靠用户态脚本运行时登记（/data/adb/service.d/96-hide-ko.sh
+ * 扫描 /data/adb/modules 下的 .ko）。占位项永远不会匹配真实模块名（模块名不允许带点），
+ * 只为避免零长数组这种编译器扩展。
+ *
+ * 想固定几个模块、开机瞬间就生效的话，在这里加名字即可，例如：
+ *	"qpace_drv",
+ *	"qpace_zram",
+ */
 static const char *const susfs_hidden_modules[] = {
-	"qpace_drv",
-	"qpace_zram",
+	"none.invalid",
 };
 
 #ifndef SUSFS_HIDE_MODULES_RT_MAX
@@ -167,7 +175,7 @@ bool susfs_hide_module_name(const char *name)
  * 只认 qpace 这一个前缀串，避免误伤无关符号。
  */
 static const char *const susfs_hidden_sym_parts[] = {
-	"qpace",
+	"qpace",	/* 绿厂 QPaCE 硬件加速相关的符号；其他设备上匹配不到，无副作用 */
 };
 
 static bool susfs_hide_sym_name_match(const char *name)
