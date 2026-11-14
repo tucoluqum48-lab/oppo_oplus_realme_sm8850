@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,457 @@
+@@ -0,0 +1,458 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -405,7 +405,8 @@ index 000000000..0000000
 +static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 +				size_t count, loff_t *ppos)
 +{
-+	char cmd[128], *op, *arg;
++	/* 1024 够放 ~160 个 uid（puid 命令一次性下发整份名单） */
++	char cmd[1024], *op, *arg;
 +	int ret;
 +
 +	if (!capable(CAP_SYS_ADMIN))
