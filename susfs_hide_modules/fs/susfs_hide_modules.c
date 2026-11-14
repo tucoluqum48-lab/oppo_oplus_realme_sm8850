@@ -55,6 +55,7 @@ static DEFINE_SPINLOCK(susfs_hidden_lock);
 /* 命中统计：/proc/susfs_hide_modules 里可读，用来确认过滤真的在生效 */
 static atomic_t susfs_n_mod_skipped = ATOMIC_INIT(0);
 static atomic_t susfs_n_sym_skipped = ATOMIC_INIT(0);
+static atomic_t susfs_n_symname_skipped = ATOMIC_INIT(0);
 
 /* 中断/seq_file 上下文都可能调用：不分配、不睡眠 */
 static bool susfs_hide_match(const char *name)
@@ -88,6 +89,39 @@ bool susfs_hide_module_name(const char *name)
 {
 	if (susfs_hide_match(name)) {
 		atomic_inc(&susfs_n_mod_skipped);
+		return true;
+	}
+	return false;
+}
+
+/*
+ * 符号名过滤：处理"符号定义在别的模块里"的情况。
+ * 例：qpace_drv 的压缩函数被厂商 zram.ko 包了一层，
+ *     符号归属变成 [zram]，按模块名抓不到，只能按符号名抹。
+ * 只认 qpace 这一个前缀串，避免误伤无关符号。
+ */
+static const char *const susfs_hidden_sym_parts[] = {
+	"qpace",
+};
+
+static bool susfs_hide_sym_name_match(const char *name)
+{
+	int i;
+
+	if (!name || !name[0])
+		return false;
+
+	for (i = 0; i < ARRAY_SIZE(susfs_hidden_sym_parts); i++) {
+		if (strstr(name, susfs_hidden_sym_parts[i]))
+			return true;
+	}
+	return false;
+}
+
+bool susfs_hide_symbol_name(const char *name)
+{
+	if (susfs_hide_sym_name_match(name)) {
+		atomic_inc(&susfs_n_symname_skipped);
 		return true;
 	}
 	return false;
@@ -189,9 +223,10 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 	seq_puts(m, "\n");
 
-	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d\n",
+	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d symbolname=%d\n",
 		   atomic_read(&susfs_n_mod_skipped),
-		   atomic_read(&susfs_n_sym_skipped));
+		   atomic_read(&susfs_n_sym_skipped),
+		   atomic_read(&susfs_n_symname_skipped));
 
 	return 0;
 }
