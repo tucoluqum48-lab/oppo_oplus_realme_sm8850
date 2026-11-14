@@ -313,45 +313,36 @@ susfs_hide_modules/0001-susfs-hide-modules.patch
 | `[ -f fs/susfs.c ]` + `grep -q susfs fs/Makefile` | susfs 主补丁那步带 `\|\| true`，静默失败时这里拦住 |
 | `grep -q "susfs_hide_modules.o" fs/Makefile` | Makefile 那一 hunk 没落地 |
 | `grep -q susfs_hide_module_name kernel/module/procfs.c` / `kernel/kallsyms.c` | 两个调用点没落地 |
-| `grep -q qpace_drv fs/susfs_hide_modules.c` | 名单是占位符（等于没藏） |## 零宽字符 / 可忽略码点路径拦截
+| `grep -q qpace_drv fs/susfs_hide_modules.c` | 名单是占位符（等于没藏） |## 零宽字符 / 可忽略码点路径拦截（全局）
 
-对应 CVE-2024-43093 那类绕过：检测方在 `/storage/emulated/0/Android/data/<pkg>`
-路径里插入零宽字符或可忽略码点，让字符串匹配失效、却仍解析到真实目录，
-从而读到被 HMA 隐藏的 app 的目录、反推包名
+对应 CVE-2024-43093 那类绕过：`/storage/emulated/0/Android/data/<pkg>`
+的黑名单是字符串匹配，插入可忽略码点后匹配失效，但 FUSE/MediaProvider
+解析时又会忽略它们，于是照样读到真实目录
 （Duck Detector 的 "Android/data ZWC Bypass" / "Ignorable CodePoint Bypass"）。
 
-实现：`fs/namei.c` 的 `getname_flags()` 里检查路径。
-
-```c
-if (unlikely(susfs_is_zwc_bypass_path(kname, len))) {
-	__putname(result);
-	return ERR_PTR(-EINVAL);
-}
-```
-
-**判定规则（不依赖字符表，覆盖所有 Unicode 手段）**
+**两道判定**（`fs/namei.c` 的 `getname_flags()`，命中返回 `-EINVAL`）：
 
 ```
-1. 路径全 ASCII → 直接放行（绝大多数路径）
-2. 丢掉所有非 ASCII 字节，得到 norm
-3. norm 里出现 "Android/data"，且非 ASCII 字节落在
-   "Android/data" + 紧跟的包名段 之内/之前 → 判定为绕过，返回 -EINVAL
+① 全局：路径任意位置出现可忽略码点 → 拒绝
+     U+00AD U+034F U+180B~180E U+200B U+200C U+200E U+200F
+     U+202A~202E U+2060~2064 U+3164 U+FEFF
+   故意不含 U+200D(ZWJ) 和 U+FE0F(VS16) —— emoji 组合会用到
+
+② 兜底：其它非 ASCII（中文目录名等）落在
+     "Android/data" + 紧跟的包名段 之内 → 拒绝
 ```
 
-所以零宽字符、可忽略码点、变体选择符、bidi 控制符、中文目录名，
-无论插在 `Android/data` 之前还是在包名段里（`com.resukisu​.resukisu`），
-统统拦得住。
-
-**不误伤**：`Android/data/com.foo/files/👨‍👩‍👧.png` 里 emoji 在
-`Android/data` 之后，放行。
-
-**单测覆盖**（12 个用例全过）：
+**单测覆盖**（10 个用例全过）：
 
 ```
-正常路径 / ZWC / ZWNJ / ZWJ / SOFT HYPHEN / CGJ / BOM / BIDI / VS16 → 按预期
-emoji 文件名在后 → 放行
-中文目录在前     → 拦截
-无关非 ASCII 路径 → 放行
+普通路径                        放行
+ZWSP 在 emulated 后             拒绝
+ZWSP 在包名里                   拒绝
+SOFT HYPHEN / BOM / BIDI RLO    拒绝
+emoji ZWJ 文件名 👨‍👩‍👧.png        放行
+emoji VS16 💯.png               放行
+中文文件名 中文.txt              放行
+中文目录在 Android 之前          拒绝
 ```
 
 
