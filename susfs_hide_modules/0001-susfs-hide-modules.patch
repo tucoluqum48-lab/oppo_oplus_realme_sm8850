@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,609 @@
+@@ -0,0 +1,657 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -92,6 +92,52 @@ index 000000000..0000000
 + * 内置 SUSFS 只对外提供 susfs_add_sus_path(void __user **)（要用户态指针），
 + * 内核态拿不到；但隐藏动作本身只是置位，直接做即可。
 + */
++/*
++ * sysfs 的 inode 是会被回收的：置位后如果没人持有，内存压力下 inode 被 evict，
++ * 下一次查找会生成新 inode，位就没了 —— 表现为「开机时藏住了，几小时后又能看到」。
++ * 所以标记成功后 ihold 持住，解除标记时 iput。
++ */
++#define SUSFS_HELD_MAX	64
++
++static struct inode *susfs_held_inodes[SUSFS_HELD_MAX];
++static int susfs_held_n;
++static DEFINE_MUTEX(susfs_held_lock);
++
++static void susfs_hold_inode(struct inode *inode)
++{
++	int i;
++
++	mutex_lock(&susfs_held_lock);
++	for (i = 0; i < susfs_held_n; i++) {
++		if (susfs_held_inodes[i] == inode) {
++			mutex_unlock(&susfs_held_lock);
++			return;
++		}
++	}
++	if (susfs_held_n < SUSFS_HELD_MAX) {
++		ihold(inode);
++		susfs_held_inodes[susfs_held_n++] = inode;
++	}
++	mutex_unlock(&susfs_held_lock);
++}
++
++static void susfs_release_inode(struct inode *inode)
++{
++	int i;
++
++	mutex_lock(&susfs_held_lock);
++	for (i = 0; i < susfs_held_n; i++) {
++		if (susfs_held_inodes[i] == inode) {
++			susfs_held_inodes[i] = susfs_held_inodes[susfs_held_n - 1];
++			susfs_held_inodes[--susfs_held_n] = NULL;
++			mutex_unlock(&susfs_held_lock);
++			iput(inode);
++			return;
++		}
++	}
++	mutex_unlock(&susfs_held_lock);
++}
++
 +static void susfs_hide_mark_path(const char *path, bool hide)
 +{
 +	struct inode *inode;
@@ -106,8 +152,10 @@ index 000000000..0000000
 +		if (hide) {
 +			set_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
 +			atomic_inc(&susfs_n_sysfs_marked);
++			susfs_hold_inode(inode);	/* 防止 inode 回收导致位丢失 */
 +		} else {
 +			clear_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags);
++			susfs_release_inode(inode);
 +		}
 +	}
 +	path_put(&p);
