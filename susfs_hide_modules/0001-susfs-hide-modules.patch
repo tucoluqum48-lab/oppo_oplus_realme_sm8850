@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,667 @@
+@@ -0,0 +1,684 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -528,6 +528,23 @@ index 000000000..0000000
 +static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);
 +static DEFINE_SPINLOCK(prio_uid_lock);
 +
++/*
++ * procfs 节点隐藏：非 root 直接当它不存在。
++ * procfs 的可见性由 proc_dir_entry 链表决定（readdir / lookup），
++ * 与 inode flags 无关，所以必须在遍历处过滤。
++ */
++bool susfs_proc_name_hidden(const char *name, unsigned int len)
++{
++	static const char ctl_name[] = "oplus_mem_zone";
++
++	if (!name || len != sizeof(ctl_name) - 1)
++		return false;
++	if (memcmp(name, ctl_name, sizeof(ctl_name) - 1))
++		return false;
++
++	return current_uid().val != 0;
++}
++
 +bool susfs_prio_uid_filtered(u32 uid)
 +{
 +	u32 app = uid % 100000;
@@ -685,7 +702,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/include/linux/susfs_hide_modules.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,61 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _LINUX_SUSFS_HIDE_MODULES_H
 +#define _LINUX_SUSFS_HIDE_MODULES_H
@@ -711,6 +728,9 @@ index 000000000..0000000
 +
 +/* 零宽字符路径拦截：fs/namei.c 的 getname_flags() 调用 */
 +bool susfs_is_zwc_bypass_path(const char *name, int len);
++
++/* 控制节点对非 root 隐藏：fs/proc/generic.c 的 lookup / readdir 调用 */
++bool susfs_proc_name_hidden(const char *name, unsigned int len);
 +#else
 +static inline bool susfs_hide_module_name(const char *name)
 +{
@@ -733,6 +753,11 @@ index 000000000..0000000
 +}
 +
 +static inline bool susfs_is_zwc_bypass_path(const char *name, int len)
++{
++	return false;
++}
++
++static inline bool susfs_proc_name_hidden(const char *name, unsigned int len)
 +{
 +	return false;
 +}
@@ -965,3 +990,43 @@ diff --git a/fs/namei.c b/fs/namei.c
  
  	/*
  	 * Uh-oh. We have a name that's approaching PATH_MAX. Allocate a
+diff --git a/fs/proc/generic.c b/fs/proc/generic.c
+--- a/fs/proc/generic.c
++++ b/fs/proc/generic.c
+@@ -12,4 +12,8 @@
+ #include <linux/cache.h>
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs_hide_modules.h>
++#endif
++
+ #include <linux/errno.h>
+ #include <linux/time.h>
+ #include <linux/proc_fs.h>
+@@ -243,6 +250,11 @@
+ struct dentry *proc_lookup_de(struct inode *dir, struct dentry *dentry,
+ 			      struct proc_dir_entry *de)
+ {
+ 	struct inode *inode;
+ 
++#ifdef CONFIG_KSU_SUSFS
++	/* 控制节点对非 root 完全不可见（lookup 层） */
++	if (susfs_proc_name_hidden(dentry->d_name.name, dentry->d_name.len))
++		return ERR_PTR(-ENOENT);
++#endif
+ 	read_lock(&proc_subdir_lock);
+@@ -300,3 +316,15 @@
+ 	do {
+ 		struct proc_dir_entry *next;
++#ifdef CONFIG_KSU_SUSFS
++		/* 控制节点对非 root 从目录列举里消失（readdir 层） */
++		if (susfs_proc_name_hidden(de->name, de->namelen)) {
++			next = pde_subdir_next(de);
++			de = next;
++			if (!de) {
++				read_unlock(&proc_subdir_lock);
++				return 1;
++			}
++			continue;
++		}
++#endif
+ 		pde_get(de);
