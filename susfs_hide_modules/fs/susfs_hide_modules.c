@@ -32,6 +32,7 @@
 #include <linux/fs.h>		/* set_bit + inode->i_mapping */
 #include <linux/namei.h>	/* kern_path */
 #include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
+#include <linux/dcache.h>	/* d_invalidate */
 #include <linux/susfs_hide_modules.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -619,8 +620,8 @@ static int susfs_hide_open(struct inode *inode, struct file *file)
 	return single_open(file, susfs_hide_show, NULL);
 }
 
-static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
-				size_t count, loff_t *ppos)
+static ssize_t susfs_hide_write_locked(struct file *file, const char __user *ubuf,
+				       size_t count, loff_t *ppos)
 {
 	/* 1024 够放 ~160 个 uid（puid 命令一次性下发整份名单） */
 	char cmd[1024], *op, *arg;
@@ -666,6 +667,23 @@ static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 
 	/* 裸名字等同 add，方便脚本一次写一行 */
 	return susfs_hide_rt_add(op) ? -EINVAL : count;
+}
+
+/*
+ * 写完之后把 dentry 从 dcache 踢掉：
+ * 平时这个路径被缓存着，非 root 的 stat 会直接命中缓存，
+ * 从而绕过 proc_lookup_de() 的过滤、最终被 SELinux 判成 EACCES。
+ * 失效后下一次查找必须走 proc 链表 → 我们的过滤返回 ENOENT。
+ */
+static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
+				size_t count, loff_t *ppos)
+{
+	ssize_t ret = susfs_hide_write_locked(file, ubuf, count, ppos);
+
+	if (ret > 0 && file)
+		d_invalidate(file->f_path.dentry);
+
+	return ret;
 }
 
 static const struct proc_ops susfs_hide_proc_ops = {
