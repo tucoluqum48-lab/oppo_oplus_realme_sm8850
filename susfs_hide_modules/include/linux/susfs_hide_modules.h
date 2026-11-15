@@ -23,6 +23,9 @@ bool susfs_prio_uid_filtered(u32 uid);
 
 /* 零宽字符路径拦截：fs/namei.c 的 getname_flags() 调用 */
 bool susfs_is_zwc_bypass_path(const char *name, int len);
+
+/* 控制节点对非 root 隐藏：fs/proc/generic.c 的 lookup / readdir 调用 */
+bool susfs_proc_name_hidden(const char *name, unsigned int len);
 #else
 static inline bool susfs_hide_module_name(const char *name)
 {
@@ -45,6 +48,11 @@ static inline bool susfs_prio_uid_filtered(u32 uid)
 }
 
 static inline bool susfs_is_zwc_bypass_path(const char *name, int len)
+{
+	return false;
+}
+
+static inline bool susfs_proc_name_hidden(const char *name, unsigned int len)
 {
 	return false;
 }
