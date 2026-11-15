@@ -608,8 +608,14 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 
 static int susfs_hide_open(struct inode *inode, struct file *file)
 {
+	/*
+	 * 非 root 一律当成"文件不存在"：-ENOENT 与路径真不存在无法区分，
+	 * 不会像 -EPERM/-EACCES 那样暴露"这里有个受保护的东西"。
+	 */
+	if (current_uid().val != 0)
+		return -ENOENT;
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return -ENOENT;
 	return single_open(file, susfs_hide_show, NULL);
 }
 
