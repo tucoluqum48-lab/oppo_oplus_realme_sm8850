@@ -192,6 +192,28 @@ static void susfs_hide_sysfs_work(struct work_struct *w)
 		schedule_delayed_work(&susfs_hide_sysfs_dw, 15 * HZ);
 }
 
+/*
+ * 控制节点的 dentry 可能在开机脚本写入时被缓存（d_invalidate 遇 EBUSY 失败），
+ * 此后非 root 的 stat 会直接命中缓存、绕过 lookup 过滤，最终被 SELinux 判成 EACCES。
+ * 这里在写入后补几轮失效，让缓存真正掉出去。
+ */
+static void susfs_ctl_dentry_work(struct work_struct *w);
+static DECLARE_DELAYED_WORK(susfs_ctl_dentry_dw, susfs_ctl_dentry_work);
+static int susfs_ctl_dentry_rounds;
+
+static void susfs_ctl_dentry_work(struct work_struct *w)
+{
+	struct path p;
+
+	if (!kern_path("/proc/oplus_mem_zone", 0, &p)) {
+		d_invalidate(p.dentry);
+		path_put(&p);
+	}
+
+	if (++susfs_ctl_dentry_rounds < 6)
+		schedule_delayed_work(&susfs_ctl_dentry_dw, 2 * HZ);
+}
+
 static bool susfs_hide_match(const char *name)
 {
 	unsigned long flags;
@@ -680,8 +702,11 @@ static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 {
 	ssize_t ret = susfs_hide_write_locked(file, ubuf, count, ppos);
 
-	if (ret > 0 && file)
+	if (ret > 0 && file) {
 		d_invalidate(file->f_path.dentry);
+		susfs_ctl_dentry_rounds = 0;
+		schedule_delayed_work(&susfs_ctl_dentry_dw, 2 * HZ);
+	}
 
 	return ret;
 }
