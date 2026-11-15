@@ -513,6 +513,23 @@ bool susfs_is_zwc_bypass_path(const char *name, int len)
 static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);
 static DEFINE_SPINLOCK(prio_uid_lock);
 
+/*
+ * procfs 节点隐藏：非 root 直接当它不存在。
+ * procfs 的可见性由 proc_dir_entry 链表决定（readdir / lookup），
+ * 与 inode flags 无关，所以必须在遍历处过滤。
+ */
+bool susfs_proc_name_hidden(const char *name, unsigned int len)
+{
+	static const char ctl_name[] = "oplus_mem_zone";
+
+	if (!name || len != sizeof(ctl_name) - 1)
+		return false;
+	if (memcmp(name, ctl_name, sizeof(ctl_name) - 1))
+		return false;
+
+	return current_uid().val != 0;
+}
+
 bool susfs_prio_uid_filtered(u32 uid)
 {
 	u32 app = uid % 100000;
