@@ -517,10 +517,20 @@ bool susfs_prio_uid_filtered(u32 uid)
 {
 	u32 app = uid % 100000;
 
-	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
-		return false;
 	if (!atomic_read(&prio_uid_cnt))
 		return false;		/* 默认空表：一次 atomic 读就返回 */
+
+	/*
+	 * 多用户：uid = userId * 100000 + appId，上面 % 100000 已归一化。
+	 * 隔离进程：90000~99999 不属于任何 app，任何 app 查询它都没有正当用途，
+	 *          过滤器启用期间一律隐藏，避免被用作枚举通道。
+	 */
+	if (app >= 90000 && app <= 99999)
+		return true;
+
+	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
+		return false;
+
 	return test_bit((unsigned int)(app - PRIO_UID_MIN), prio_uid_bits);
 }
 
