@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,733 @@
+@@ -0,0 +1,743 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -720,17 +720,27 @@ index 000000000..0000000
 +	if (ret > 0 && file) {
 +		d_invalidate(file->f_path.dentry);
 +		susfs_ctl_dentry_rounds = 0;
-+		schedule_delayed_work(&susfs_ctl_dentry_dw, 2 * HZ);
++		schedule_delayed_work(&susfs_ctl_dentry_dw, HZ / 2);
 +	}
 +
 +	return ret;
++}
++
++/*
++ * 关闭时立刻让 dentry 失效：开机脚本是 open→write→close，
++ * close 时文件已不被占用，d_invalidate 几乎必定成功 → 窗口期接近 0。
++ */
++static int susfs_hide_release(struct inode *inode, struct file *file)
++{
++	d_invalidate(file->f_path.dentry);
++	return single_release(inode, file);
 +}
 +
 +static const struct proc_ops susfs_hide_proc_ops = {
 +	.proc_open	= susfs_hide_open,
 +	.proc_read	= seq_read,
 +	.proc_lseek	= seq_lseek,
-+	.proc_release	= single_release,
++	.proc_release	= susfs_hide_release,
 +	.proc_write	= susfs_hide_write,
 +};
 +
