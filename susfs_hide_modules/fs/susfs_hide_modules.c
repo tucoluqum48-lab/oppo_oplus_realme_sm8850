@@ -36,6 +36,7 @@
 #include <linux/vmalloc.h>	/* vmalloc/vfree */
 #include <linux/fcntl.h>	/* O_RDONLY / O_NOATIME */
 #include <linux/cred.h>	/* prepare_creds / commit_creds */
+#include <linux/crc32.h>	/* crc32 */
 #include <linux/slab.h>
 #include <linux/susfs_hide_modules.h>
 #include <linux/proc_fs.h>
@@ -538,7 +539,11 @@ bool susfs_is_zwc_bypass_path(const char *name, int len)
 #define PRIO_UID_NUM	(PRIO_UID_MAX - PRIO_UID_MIN + 1)
 
 static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);      /* 由 puid 直接下发 */
-static DECLARE_BITMAP(prio_app_bits, PRIO_UID_NUM);      /* 由包名解析得来 */
+/* 双缓冲：写侧填另一块，填完一次性切换，读侧永远看到完整位图 */
+static DECLARE_BITMAP(prio_app_bits_a, PRIO_UID_NUM);
+static DECLARE_BITMAP(prio_app_bits_b, PRIO_UID_NUM);
+static int prio_app_active;                              /* 0 = a, 1 = b */
+static u32 prio_app_last_hash;                           /* 内容哈希，未变则跳过重建 */
 static DEFINE_SPINLOCK(prio_uid_lock);
 static atomic_t prio_app_cnt = ATOMIC_INIT(0);
 
@@ -565,6 +570,7 @@ static atomic_t papp_dbg_size = ATOMIC_INIT(0);
 static atomic_t papp_dbg_read = ATOMIC_INIT(0);
 static atomic_t papp_dbg_lines = ATOMIC_INIT(0);
 static atomic_t papp_dbg_match = ATOMIC_INIT(0);
+static atomic_t papp_dbg_swap = ATOMIC_INIT(0);	/* 位图实际切换次数 */
 
 /*
  * procfs 节点隐藏：非 root 直接当它不存在。
@@ -601,8 +607,13 @@ bool susfs_prio_uid_filtered(u32 uid)
 	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
 		return false;
 
-	if (test_bit((unsigned int)(app - PRIO_UID_MIN), prio_app_bits))
-		return true;
+	{
+		int idx = READ_ONCE(prio_app_active);
+		unsigned long *bm = idx ? prio_app_bits_b : prio_app_bits_a;
+
+		if (test_bit((unsigned int)(app - PRIO_UID_MIN), bm))
+			return true;
+	}
 
 	return test_bit((unsigned int)(app - PRIO_UID_MIN), prio_uid_bits);
 }
@@ -663,6 +674,9 @@ static void susfs_papp_refresh(void)
 	char *buf = NULL;
 	char (*names)[SUSFS_PAPP_LEN] = susfs_papp_work_names;
 	int nr = 0, i;
+	int stale_idx;			/* 本轮要填的缓冲 */
+	int new_cnt = 0;
+	u32 new_hash = 0;
 	loff_t pos = 0;
 	loff_t size;
 
@@ -672,11 +686,17 @@ static void susfs_papp_refresh(void)
 		memcpy(names[i], susfs_papp_list[i], SUSFS_PAPP_LEN);
 	spin_unlock(&susfs_papp_lock);
 
-	bitmap_zero(prio_app_bits, PRIO_UID_NUM);
-	atomic_set(&prio_app_cnt, 0);
+	if (!nr) {
+		/* 名单清空：把 active 指向一块空位图即可（无需清两块） */
+		int idx = READ_ONCE(prio_app_active);
 
-	if (!nr)
+		bitmap_zero(idx ? prio_app_bits_a : prio_app_bits_b, PRIO_UID_NUM);
+		WRITE_ONCE(prio_app_active, idx ? 0 : 1);
+		atomic_set(&prio_app_cnt, 0);
 		return;
+	}
+
+	stale_idx = READ_ONCE(prio_app_active) ? 0 : 1;	/* 填另一块 */
 
 	orig_cred = susfs_papp_enter_ksu_domain();
 
@@ -711,12 +731,15 @@ static void susfs_papp_refresh(void)
 	if (atomic_read(&papp_dbg_read) > 0) {
 		char *line, *next;
 
+		bitmap_zero(stale_idx ? prio_app_bits_b : prio_app_bits_a, PRIO_UID_NUM);
+
 		buf[size] = '\0';
 		for (line = buf; line && *line; line = next) {
 			char *pkg, *uid_str, *p;
 			unsigned int uid;
 
 			atomic_inc(&papp_dbg_lines);
+			new_hash = crc32(new_hash, line, strlen(line));
 			next = strchr(line, '\n');
 			if (next)
 				*next++ = '\0';
@@ -739,8 +762,8 @@ static void susfs_papp_refresh(void)
 				if (!strcmp(names[i], pkg)) {
 					atomic_inc(&papp_dbg_match);
 					if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
-							      prio_app_bits))
-						atomic_inc(&prio_app_cnt);
+							      stale_idx ? prio_app_bits_b : prio_app_bits_a))
+						new_cnt++;
 					break;
 				}
 			}
@@ -750,6 +773,15 @@ static void susfs_papp_refresh(void)
 	vfree(buf);
 	filp_close(fp, NULL);
 	susfs_papp_leave_ksu_domain(orig_cred);
+
+	/* 内容没变就不换缓冲，避免无谓的位图重建 */
+	if (new_hash == prio_app_last_hash && new_cnt == atomic_read(&prio_app_cnt))
+		return;
+
+	prio_app_last_hash = new_hash;
+	WRITE_ONCE(prio_app_active, stale_idx);
+	atomic_set(&prio_app_cnt, new_cnt);
+	atomic_set(&papp_dbg_swap, atomic_read(&papp_dbg_swap) + 1);
 }
 
 static void susfs_papp_work(struct work_struct *w);
@@ -789,7 +821,11 @@ static void susfs_hide_papp_set(char *arg)
 	if (nr)
 		schedule_delayed_work(&susfs_papp_dw, HZ / 4);
 	else {
-		bitmap_zero(prio_app_bits, PRIO_UID_NUM);
+		/* 名单清空：清掉非 active 那块并切过去 */
+		int idx = READ_ONCE(prio_app_active);
+
+		bitmap_zero(idx ? prio_app_bits_a : prio_app_bits_b, PRIO_UID_NUM);
+		WRITE_ONCE(prio_app_active, idx ? 0 : 1);
 		atomic_set(&prio_app_cnt, 0);
 	}
 }
@@ -876,6 +912,7 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 	seq_printf(m, "prio_app: %d uid (%d names)\n",
 		   atomic_read(&prio_app_cnt), susfs_papp_nr);
 	seq_printf(m, "sallow: %d uid\n", atomic_read(&sus_path_allow_cnt));
+	seq_printf(m, "papp_swap: %d\n", atomic_read(&papp_dbg_swap));
 	seq_printf(m, "papp_dbg: open=%d size=%d read=%d lines=%d match=%d\n",
 		   atomic_read(&papp_dbg_open), atomic_read(&papp_dbg_size),
 		   atomic_read(&papp_dbg_read), atomic_read(&papp_dbg_lines),
