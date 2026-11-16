@@ -547,11 +547,18 @@ static DEFINE_SPINLOCK(sus_path_allow_lock);
 static atomic_t sus_path_allow_cnt = ATOMIC_INIT(0);
 
 /* 包名列表：内核按名字解析 uid，app 重装换 uid 后自动跟随 */
-#define SUSFS_PAPP_MAX		16
+#define SUSFS_PAPP_MAX		32
 #define SUSFS_PAPP_LEN		64
 static char susfs_papp_list[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
 static int susfs_papp_nr;
 static DEFINE_SPINLOCK(susfs_papp_lock);
+
+/* 诊断：解析过程的关键数字（show 里输出） */
+static atomic_t papp_dbg_open = ATOMIC_INIT(0);   /* 0=未尝试 1=成功 -1=失败 */
+static atomic_t papp_dbg_size = ATOMIC_INIT(0);
+static atomic_t papp_dbg_read = ATOMIC_INIT(0);
+static atomic_t papp_dbg_lines = ATOMIC_INIT(0);
+static atomic_t papp_dbg_match = ATOMIC_INIT(0);
 
 /*
  * procfs 节点隐藏：非 root 直接当它不存在。
@@ -634,14 +641,17 @@ static void susfs_papp_refresh(void)
 		return;
 
 	fp = filp_open("/data/system/packages.list", O_RDONLY, 0);
-	if (IS_ERR(fp))
-		return;
-
-	size = i_size_read(file_inode(fp));
-	if (size <= 0 || size > (4 * 1024 * 1024)) {
-		filp_close(fp, NULL);
+	if (IS_ERR(fp)) {
+		atomic_set(&papp_dbg_open, -1);
 		return;
 	}
+	atomic_set(&papp_dbg_open, 1);
+
+	size = i_size_read(file_inode(fp));
+	atomic_set(&papp_dbg_size, (int)size);
+	/* 某些 fs 对 proc-like 文件报 0，兜底按 256KB 读 */
+	if (size <= 0 || size > (4 * 1024 * 1024))
+		size = 256 * 1024;
 
 	buf = vmalloc(size + 1);
 	if (!buf) {
@@ -649,7 +659,13 @@ static void susfs_papp_refresh(void)
 		return;
 	}
 
-	if (kernel_read(fp, buf, size, &pos) == size) {
+	{
+		loff_t rd = kernel_read(fp, buf, size, &pos);
+		atomic_set(&papp_dbg_read, (int)rd);
+		if (rd > 0)
+			size = rd;      /* 实际读到的字节数 */
+	}
+	if (atomic_read(&papp_dbg_read) > 0) {
 		char *line, *next;
 
 		buf[size] = '\0';
@@ -657,6 +673,7 @@ static void susfs_papp_refresh(void)
 			char *pkg, *uid_str, *p;
 			unsigned int uid;
 
+			atomic_inc(&papp_dbg_lines);
 			next = strchr(line, '\n');
 			if (next)
 				*next++ = '\0';
@@ -677,6 +694,7 @@ static void susfs_papp_refresh(void)
 
 			for (i = 0; i < nr; i++) {
 				if (!strcmp(names[i], pkg)) {
+					atomic_inc(&papp_dbg_match);
 					if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
 							      prio_app_bits))
 						atomic_inc(&prio_app_cnt);
@@ -814,6 +832,10 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 	seq_printf(m, "prio_app: %d uid (%d names)\n",
 		   atomic_read(&prio_app_cnt), susfs_papp_nr);
 	seq_printf(m, "sallow: %d uid\n", atomic_read(&sus_path_allow_cnt));
+	seq_printf(m, "papp_dbg: open=%d size=%d read=%d lines=%d match=%d\n",
+		   atomic_read(&papp_dbg_open), atomic_read(&papp_dbg_size),
+		   atomic_read(&papp_dbg_read), atomic_read(&papp_dbg_lines),
+		   atomic_read(&papp_dbg_match));
 
 	return 0;
 }
