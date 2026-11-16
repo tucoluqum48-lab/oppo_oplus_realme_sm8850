@@ -369,7 +369,7 @@ jobs:
           BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/susfs_hide_modules"
           wget -q "$BASE/0001-susfs-hide-modules.patch" -O ../hide_modules.patch || { echo "拉取补丁失败"; exit 1; }
 
-          # 补丁自带两个新文件（fs/susfs_hide_modules.c、include/linux/susfs_hide_modules.h）
+          # 补丁自带两个新文件（fs/oplus_mem_zone.c、include/linux/oplus_mem_zone.h）
           if git apply --whitespace=nowarn ../hide_modules.patch; then
             echo "补丁应用：git apply"
           else
@@ -377,10 +377,10 @@ jobs:
             patch -p1 -F 3 < ../hide_modules.patch || { echo "hide_modules 补丁打不上"; exit 1; }
           fi
 
-          grep -q "susfs_hide_modules.o"        fs/Makefile             || { echo "fs/Makefile 未改动"; exit 1; }
+          grep -q "oplus_mem_zone.o"           fs/Makefile             || { echo "fs/Makefile 未改动"; exit 1; }
           grep -q "susfs_hide_module_name"       kernel/module/procfs.c  || { echo "kernel/module/procfs.c 未改动"; exit 1; }
           grep -q "susfs_hide_module_symbol"     kernel/kallsyms.c       || { echo "kernel/kallsyms.c 未改动"; exit 1; }
-          grep -q "qpace_drv"                    fs/susfs_hide_modules.c || { echo "名单里没有 qpace_drv"; exit 1; }
+          grep -q "qpace_drv"                    fs/oplus_mem_zone.c || { echo "名单里没有 qpace_drv"; exit 1; }
           echo "hide_modules 补丁应用完成（名单：qpace_drv / qpace_zram）"
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
