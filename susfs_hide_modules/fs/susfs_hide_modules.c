@@ -644,7 +644,8 @@ static void susfs_papp_refresh(void)
 
 	fp = filp_open("/data/system/packages.list", O_RDONLY, 0);
 	if (IS_ERR(fp)) {
-		atomic_set(&papp_dbg_open, -1);
+		/* 记录具体 errno：-2=ENOENT -13=EACCES -5=EIO -12=ENOMEM */
+		atomic_set(&papp_dbg_open, (int)PTR_ERR(fp));
 		return;
 	}
 	atomic_set(&papp_dbg_open, 1);
