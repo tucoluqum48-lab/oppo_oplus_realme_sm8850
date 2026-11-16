@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,965 @@
+@@ -0,0 +1,1006 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -50,6 +50,7 @@ index 000000000..0000000
 +#include <linux/dcache.h>	/* d_invalidate */
 +#include <linux/vmalloc.h>	/* vmalloc/vfree */
 +#include <linux/fcntl.h>	/* O_RDONLY / O_NOATIME */
++#include <linux/cred.h>	/* prepare_creds / commit_creds */
 +#include <linux/slab.h>
 +#include <linux/susfs_hide_modules.h>
 +#include <linux/proc_fs.h>
@@ -570,6 +571,9 @@ index 000000000..0000000
 +static int susfs_papp_nr;
 +static DEFINE_SPINLOCK(susfs_papp_lock);
 +
++/* KernelSU 提供：把 cred 的 SELinux 域改成指定值 */
++extern void setup_selinux(const char *domain, struct cred *cred);
++
 +/* 诊断：解析过程的关键数字（show 里输出） */
 +static atomic_t papp_dbg_open = ATOMIC_INIT(0);   /* 0=未尝试 1=成功 -1=失败 */
 +static atomic_t papp_dbg_size = ATOMIC_INIT(0);
@@ -636,9 +640,41 @@ index 000000000..0000000
 + * 该文件由 PackageManagerService 维护，重装 app 后 uid 会变，
 + * 所以按包名记名单、周期性重算，避免名单过期。
 + */
++/*
++ * 读 /data/system/packages.list 需要 KernelSU 的 SELinux 域。
++ * 内核线程默认域的规则看不到该文件（且失败时未必留下 avc 日志），
++ * 所以临时切域、读完后严格恢复。
++ */
++static struct cred *susfs_papp_enter_ksu_domain(void)
++{
++	struct cred *orig;
++	struct cred *cred;
++
++	orig = prepare_creds();
++	if (!orig)
++		return NULL;
++
++	cred = prepare_creds();
++	if (!cred) {
++		abort_creds(orig);
++		return NULL;
++	}
++
++	setup_selinux("u:r:ksu:s0", cred);
++	commit_creds(cred);
++	return orig;
++}
++
++static void susfs_papp_leave_ksu_domain(struct cred *orig)
++{
++	if (orig)
++		commit_creds(orig);
++}
++
 +static void susfs_papp_refresh(void)
 +{
 +	struct file *fp;
++	struct cred *orig_cred;
 +	char *buf = NULL;
 +	char (*names)[SUSFS_PAPP_LEN] = susfs_papp_work_names;
 +	int nr = 0, i;
@@ -657,8 +693,11 @@ index 000000000..0000000
 +	if (!nr)
 +		return;
 +
++	orig_cred = susfs_papp_enter_ksu_domain();
++
 +	fp = filp_open("/data/system/packages.list", O_RDONLY, 0);
 +	if (IS_ERR(fp)) {
++		susfs_papp_leave_ksu_domain(orig_cred);
 +		/* 记录具体 errno：-2=ENOENT -13=EACCES -5=EIO -12=ENOMEM */
 +		atomic_set(&papp_dbg_open, (int)PTR_ERR(fp));
 +		return;
@@ -674,6 +713,7 @@ index 000000000..0000000
 +	buf = vmalloc(size + 1);
 +	if (!buf) {
 +		filp_close(fp, NULL);
++		susfs_papp_leave_ksu_domain(orig_cred);
 +		return;
 +	}
 +
@@ -724,6 +764,7 @@ index 000000000..0000000
 +
 +	vfree(buf);
 +	filp_close(fp, NULL);
++	susfs_papp_leave_ksu_domain(orig_cred);
 +}
 +
 +static void susfs_papp_work(struct work_struct *w);
