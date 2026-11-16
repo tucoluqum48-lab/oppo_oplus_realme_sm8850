@@ -550,6 +550,8 @@ static atomic_t sus_path_allow_cnt = ATOMIC_INIT(0);
 #define SUSFS_PAPP_MAX		32
 #define SUSFS_PAPP_LEN		64
 static char susfs_papp_list[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
+/* 解析用的工作副本：只在 workqueue 里串行访问，放静态区避免 2KB 栈帧 */
+static char susfs_papp_work_names[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
 static int susfs_papp_nr;
 static DEFINE_SPINLOCK(susfs_papp_lock);
 
@@ -623,7 +625,7 @@ static void susfs_papp_refresh(void)
 {
 	struct file *fp;
 	char *buf = NULL;
-	char names[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
+	char (*names)[SUSFS_PAPP_LEN] = susfs_papp_work_names;
 	int nr = 0, i;
 	loff_t pos = 0;
 	loff_t size;
