@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,743 @@
+@@ -0,0 +1,940 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -48,6 +48,9 @@ index 000000000..0000000
 +#include <linux/namei.h>	/* kern_path */
 +#include <linux/workqueue.h>	/* 延迟同步 /sys/module 规则 */
 +#include <linux/dcache.h>	/* d_invalidate */
++#include <linux/vmalloc.h>	/* vmalloc/vfree */
++#include <linux/fcntl.h>	/* O_RDONLY / O_NOATIME */
++#include <linux/slab.h>
 +#include <linux/susfs_hide_modules.h>
 +#include <linux/proc_fs.h>
 +#include <linux/seq_file.h>
@@ -548,8 +551,22 @@ index 000000000..0000000
 +#define PRIO_UID_MAX	19999
 +#define PRIO_UID_NUM	(PRIO_UID_MAX - PRIO_UID_MIN + 1)
 +
-+static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);
++static DECLARE_BITMAP(prio_uid_bits, PRIO_UID_NUM);      /* 由 puid 直接下发 */
++static DECLARE_BITMAP(prio_app_bits, PRIO_UID_NUM);      /* 由包名解析得来 */
 +static DEFINE_SPINLOCK(prio_uid_lock);
++static atomic_t prio_app_cnt = ATOMIC_INIT(0);
++
++/* sus_path 白名单：名单内的 uid 不受 strict 位影响（正常 app 能看到自己的目录） */
++static DECLARE_BITMAP(sus_path_allow_bits, PRIO_UID_NUM);
++static DEFINE_SPINLOCK(sus_path_allow_lock);
++static atomic_t sus_path_allow_cnt = ATOMIC_INIT(0);
++
++/* 包名列表：内核按名字解析 uid，app 重装换 uid 后自动跟随 */
++#define SUSFS_PAPP_MAX		16
++#define SUSFS_PAPP_LEN		64
++static char susfs_papp_list[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
++static int susfs_papp_nr;
++static DEFINE_SPINLOCK(susfs_papp_lock);
 +
 +/*
 + * procfs 节点隐藏：非 root 直接当它不存在。
@@ -586,7 +603,176 @@ index 000000000..0000000
 +	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
 +		return false;
 +
++	if (test_bit((unsigned int)(app - PRIO_UID_MIN), prio_app_bits))
++		return true;
++
 +	return test_bit((unsigned int)(app - PRIO_UID_MIN), prio_uid_bits);
++}
++
++/* strict 位判定用：白名单内的 uid 视为"允许看见" */
++bool susfs_sus_path_uid_allowed(u32 uid)
++{
++	u32 app = uid % 100000;
++
++	if (!atomic_read(&sus_path_allow_cnt))
++		return false;
++	if (app < PRIO_UID_MIN || app > PRIO_UID_MAX)
++		return false;
++
++	return test_bit((unsigned int)(app - PRIO_UID_MIN), sus_path_allow_bits);
++}
++
++/*
++ * 从 /data/system/packages.list 解析「包名 -> uid」。
++ * 该文件由 PackageManagerService 维护，重装 app 后 uid 会变，
++ * 所以按包名记名单、周期性重算，避免名单过期。
++ */
++static void susfs_papp_refresh(void)
++{
++	struct file *fp;
++	char *buf = NULL;
++	char names[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
++	int nr = 0, i;
++	loff_t pos = 0;
++	loff_t size;
++
++	spin_lock(&susfs_papp_lock);
++	nr = susfs_papp_nr;
++	for (i = 0; i < nr; i++)
++		memcpy(names[i], susfs_papp_list[i], SUSFS_PAPP_LEN);
++	spin_unlock(&susfs_papp_lock);
++
++	bitmap_zero(prio_app_bits, PRIO_UID_NUM);
++	atomic_set(&prio_app_cnt, 0);
++
++	if (!nr)
++		return;
++
++	fp = filp_open("/data/system/packages.list", O_RDONLY, 0);
++	if (IS_ERR(fp))
++		return;
++
++	size = i_size_read(file_inode(fp));
++	if (size <= 0 || size > (4 * 1024 * 1024)) {
++		filp_close(fp, NULL);
++		return;
++	}
++
++	buf = vmalloc(size + 1);
++	if (!buf) {
++		filp_close(fp, NULL);
++		return;
++	}
++
++	if (kernel_read(fp, buf, size, &pos) == size) {
++		char *line, *next;
++
++		buf[size] = '\0';
++		for (line = buf; line && *line; line = next) {
++			char *pkg, *uid_str, *p;
++			unsigned int uid;
++
++			next = strchr(line, '\n');
++			if (next)
++				*next++ = '\0';
++
++			pkg = line;
++			p = strchr(pkg, ' ');
++			if (!p)
++				continue;
++			*p = '\0';
++			uid_str = p + 1;
++			p = strchr(uid_str, ' ');
++			if (p)
++				*p = '\0';
++
++			if (kstrtou32(uid_str, 10, &uid) || uid < PRIO_UID_MIN ||
++			    uid > PRIO_UID_MAX)
++				continue;
++
++			for (i = 0; i < nr; i++) {
++				if (!strcmp(names[i], pkg)) {
++					if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
++							      prio_app_bits))
++						atomic_inc(&prio_app_cnt);
++					break;
++				}
++			}
++		}
++	}
++
++	vfree(buf);
++	filp_close(fp, NULL);
++}
++
++static void susfs_papp_work(struct work_struct *w);
++static DECLARE_DELAYED_WORK(susfs_papp_dw, susfs_papp_work);
++
++static void susfs_papp_work(struct work_struct *w)
++{
++	susfs_papp_refresh();
++	if (susfs_papp_nr)
++		schedule_delayed_work(&susfs_papp_dw, 60 * HZ);
++}
++
++/* echo "papp com.xxx com.yyy" ；echo "papp clear" */
++static void susfs_hide_papp_set(char *arg)
++{
++	char *tok, *p = arg;
++	int nr = 0;
++	unsigned long flags;
++
++	spin_lock_irqsave(&susfs_papp_lock, flags);
++	memset(susfs_papp_list, 0, sizeof(susfs_papp_list));
++	susfs_papp_nr = 0;
++
++	if (arg && strcmp(arg, "clear")) {
++		while ((tok = strsep(&p, " ,\t")) != NULL && nr < SUSFS_PAPP_MAX) {
++			tok = skip_spaces(tok);
++			if (!*tok)
++				continue;
++			strscpy(susfs_papp_list[nr], tok, SUSFS_PAPP_LEN);
++			nr++;
++		}
++	}
++	susfs_papp_nr = nr;
++	spin_unlock_irqrestore(&susfs_papp_lock, flags);
++
++	cancel_delayed_work_sync(&susfs_papp_dw);
++	if (nr)
++		schedule_delayed_work(&susfs_papp_dw, HZ / 4);
++	else {
++		bitmap_zero(prio_app_bits, PRIO_UID_NUM);
++		atomic_set(&prio_app_cnt, 0);
++	}
++}
++
++/* echo "sallow 10381 10377" ；echo "sallow clear" */
++static void susfs_hide_sallow_set(char *arg)
++{
++	unsigned long flags;
++	char *tok, *p = arg;
++	u32 uid;
++
++	spin_lock_irqsave(&sus_path_allow_lock, flags);
++	bitmap_zero(sus_path_allow_bits, PRIO_UID_NUM);
++	atomic_set(&sus_path_allow_cnt, 0);
++
++	if (arg && strcmp(arg, "clear")) {
++		while ((tok = strsep(&p, " ,\t")) != NULL) {
++			tok = skip_spaces(tok);
++			if (!*tok)
++				continue;
++			if (kstrtou32(tok, 10, &uid))
++				continue;
++			if (uid < PRIO_UID_MIN || uid > PRIO_UID_MAX)
++				continue;
++			if (!test_and_set_bit((unsigned int)(uid - PRIO_UID_MIN),
++					      sus_path_allow_bits))
++				atomic_inc(&sus_path_allow_cnt);
++		}
++	}
++	spin_unlock_irqrestore(&sus_path_allow_lock, flags);
 +}
 +
 +static void susfs_hide_prio_set(char *arg)
@@ -640,6 +826,9 @@ index 000000000..0000000
 +		   atomic_read(&susfs_n_symname_skipped),
 +		   atomic_read(&susfs_n_sysfs_marked));
 +	seq_printf(m, "prio: %d uid\n", atomic_read(&prio_uid_cnt));
++	seq_printf(m, "prio_app: %d uid (%d names)\n",
++		   atomic_read(&prio_app_cnt), susfs_papp_nr);
++	seq_printf(m, "sallow: %d uid\n", atomic_read(&sus_path_allow_cnt));
 +
 +	return 0;
 +}
@@ -691,6 +880,14 @@ index 000000000..0000000
 +	}
 +	if (!strcmp(op, "puid")) {
 +		susfs_hide_prio_set(arg);
++		return count;
++	}
++	if (!strcmp(op, "papp")) {
++		susfs_hide_papp_set(arg);
++		return count;
++	}
++	if (!strcmp(op, "sallow")) {
++		susfs_hide_sallow_set(arg);
 +		return count;
 +	}
 +	if (!strcmp(op, "add")) {
@@ -761,7 +958,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/include/linux/susfs_hide_modules.h
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,69 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +#ifndef _LINUX_SUSFS_HIDE_MODULES_H
 +#define _LINUX_SUSFS_HIDE_MODULES_H
@@ -790,6 +987,9 @@ index 000000000..0000000
 +
 +/* 控制节点对非 root 隐藏：fs/proc/generic.c 的 lookup / readdir 调用 */
 +bool susfs_proc_name_hidden(const char *name, unsigned int len);
++
++/* sus_path 白名单：名单内 uid 不受 strict 位影响（fs/susfs.c 调用） */
++bool susfs_sus_path_uid_allowed(u32 uid);
 +#else
 +static inline bool susfs_hide_module_name(const char *name)
 +{
@@ -817,6 +1017,11 @@ index 000000000..0000000
 +}
 +
 +static inline bool susfs_proc_name_hidden(const char *name, unsigned int len)
++{
++	return false;
++}
++
++static inline bool susfs_sus_path_uid_allowed(u32 uid)
 +{
 +	return false;
 +}
@@ -901,7 +1106,7 @@ diff --git a/fs/susfs.c b/fs/susfs.c
  #include <linux/version.h>
 +#include <linux/susfs_hide_modules.h>
  #include <linux/cred.h>
-@@ -189,5 +189,12 @@
+@@ -189,5 +189,13 @@
  bool susfs_is_inode_sus_path(struct inode *inode)
  #endif
  {
@@ -911,7 +1116,8 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +	 *   shell / system 这类非 app 进程会绕过，这里补上） */
 +	if (inode && inode->i_mapping &&
 +	    test_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags) &&
-+	    current_uid().val != 0)
++	    current_uid().val != 0 &&
++	    !susfs_sus_path_uid_allowed(current_uid().val))
 +		return true;
  	if (!susfs_is_current_proc_umounted_app()) {
 diff --git a/kernel/sys.c b/kernel/sys.c
