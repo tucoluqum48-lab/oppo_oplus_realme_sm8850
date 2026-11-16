@@ -2,7 +2,7 @@
 """生成 0001-susfs-hide-modules.patch（内建 hide_modules 补丁）。
 
 锚点已在 Linux v6.12 源码上核对：
-  fs/Makefile             —— 追加 obj-$(CONFIG_KSU_SUSFS) += susfs_hide_modules.o
+  fs/Makefile             —— 追加 obj-$(CONFIG_KSU_SUSFS) += oplus_mem_zone.o
   kernel/module/procfs.c  —— include + m_show() 按 mod->name 跳过整行
   kernel/kallsyms.c       —— include + s_show() 按 iter->module_name 跳过整行
 """
@@ -58,7 +58,7 @@ MAKEFILE += hunk(
     24, 24,
     " obj-$(CONFIG_BUFFER_HEAD)\t+= buffer.o mpage.o\n"
     " obj-$(CONFIG_PROC_FS)\t\t+= proc_namespace.o\n"
-    "+obj-$(CONFIG_KSU_SUSFS) += susfs_hide_modules.o\n"
+    "+obj-$(CONFIG_KSU_SUSFS) += oplus_mem_zone.o\n"
     " obj-$(CONFIG_LEGACY_DIRECT_IO)\t+= direct-io.o\n"
     " obj-y\t\t\t\t+= notify/\n",
 )
@@ -68,7 +68,7 @@ PROCFS += hunk(
     9, 9,
     " #include <linux/module.h>\n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     " #include <linux/kallsyms.h>\n"
     " #include <linux/mutex.h>\n",
@@ -99,7 +99,7 @@ KALLSYMS += hunk(
     14, 14,
     "  */\n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     " #include <linux/kallsyms.h>\n"
     " #include <linux/init.h>\n",
@@ -138,7 +138,7 @@ SUSFS_C = "diff --git a/fs/susfs.c b/fs/susfs.c\n--- a/fs/susfs.c\n+++ b/fs/susf
 SUSFS_C += hunk(
     1, 1,
     " #include <linux/version.h>\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     " #include <linux/cred.h>\n",
 )
 SUSFS_C += hunk(
@@ -152,7 +152,8 @@ SUSFS_C += hunk(
     "+\t *   shell / system 这类非 app 进程会绕过，这里补上） */\n"
     "+\tif (inode && inode->i_mapping &&\n"
     "+\t    test_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags) &&\n"
-    "+\t    current_uid().val != 0)\n"
+    "+\t    current_uid().val != 0 &&\n"
+    "+\t    !susfs_sus_path_uid_allowed(current_uid().val))\n"
     "+\t\treturn true;\n"
     " \tif (!susfs_is_current_proc_umounted_app()) {\n",
 )
@@ -166,7 +167,7 @@ SYS_C += hunk(
     " }\n"
     " \n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     "+\n"
     " SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)\n"
@@ -222,7 +223,7 @@ IOPRIO_C += hunk(
     " }\n"
     " \n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     "+\n"
     " SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)\n",
@@ -280,7 +281,7 @@ NAMEI_C += hunk(
     " #include <linux/wordpart.h>\n"
     " #include <linux/fs.h>\n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     " #include <linux/filelock.h>\n",
 )
@@ -314,7 +315,7 @@ GENERIC_C += (
     "@@ -12,4 +12,8 @@\n"
     " #include <linux/cache.h>\n"
     "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/susfs_hide_modules.h>\n"
+    "+#include <linux/oplus_mem_zone.h>\n"
     "+#endif\n"
     "+\n"
     " #include <linux/errno.h>\n"
@@ -357,8 +358,8 @@ GENERIC_C += hunk(
 
 out = (
     HEADER
-    + newfile("fs/susfs_hide_modules.c")
-    + newfile("include/linux/susfs_hide_modules.h")
+    + newfile("fs/oplus_mem_zone.c")
+    + newfile("include/linux/oplus_mem_zone.h")
     + MAKEFILE
     + PROCFS
     + KALLSYMS
