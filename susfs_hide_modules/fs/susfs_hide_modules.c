@@ -705,17 +705,27 @@ static ssize_t susfs_hide_write(struct file *file, const char __user *ubuf,
 	if (ret > 0 && file) {
 		d_invalidate(file->f_path.dentry);
 		susfs_ctl_dentry_rounds = 0;
-		schedule_delayed_work(&susfs_ctl_dentry_dw, 2 * HZ);
+		schedule_delayed_work(&susfs_ctl_dentry_dw, HZ / 2);
 	}
 
 	return ret;
+}
+
+/*
+ * 关闭时立刻让 dentry 失效：开机脚本是 open→write→close，
+ * close 时文件已不被占用，d_invalidate 几乎必定成功 → 窗口期接近 0。
+ */
+static int susfs_hide_release(struct inode *inode, struct file *file)
+{
+	d_invalidate(file->f_path.dentry);
+	return single_release(inode, file);
 }
 
 static const struct proc_ops susfs_hide_proc_ops = {
 	.proc_open	= susfs_hide_open,
 	.proc_read	= seq_read,
 	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_release	= susfs_hide_release,
 	.proc_write	= susfs_hide_write,
 };
 
