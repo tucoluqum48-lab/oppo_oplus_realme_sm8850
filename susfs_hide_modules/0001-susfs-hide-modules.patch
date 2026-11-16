@@ -7,15 +7,15 @@ Subject: [PATCH] susfs: hide selected kernel modules from /proc/modules and /pro
   - /sys/module/<name> 由本模块置 strict 位，对所有非 root 生效（root 仍可见）
 
 前置：susfs 主补丁 50_add_susfs_in_gki-*.patch 已应用（本补丁排在其后）。
-diff --git a/fs/susfs_hide_modules.c b/fs/susfs_hide_modules.c
+diff --git a/fs/oplus_mem_zone.c b/fs/oplus_mem_zone.c
 new file mode 100644
 index 000000000..0000000
 --- /dev/null
-+++ b/fs/susfs_hide_modules.c
++++ b/fs/oplus_mem_zone.c
 @@ -0,0 +1,1048 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
-+ * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
++ * oplus_mem_zone.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
 + *
 + * 与 susfs4ksu-for-lkm 的 hide_modules 等价，但走源码：没有 .ko、没有运行时 hook、
 + * 没有模块条目需要自己擦。
@@ -53,12 +53,12 @@ index 000000000..0000000
 +#include <linux/cred.h>	/* prepare_creds / commit_creds */
 +#include <linux/crc32.h>	/* crc32 */
 +#include <linux/slab.h>
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#include <linux/proc_fs.h>
 +#include <linux/seq_file.h>
 +#include <linux/uaccess.h>
 +#include <linux/capability.h>
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +
 +/*
 + * 编译期名单。名字必须精确匹配 struct module->name，也就是
@@ -1049,27 +1049,27 @@ index 000000000..0000000
 +	.proc_write	= susfs_hide_write,
 +};
 +
-+static int __init susfs_hide_modules_init(void)
++static int __init oplus_mem_zone_init(void)
 +{
 +	if (!proc_create("oplus_mem_zone", 0600, NULL, &susfs_hide_proc_ops))
-+		pr_warn("susfs_hide_modules: /proc node not created\n");
++		pr_warn("oplus_mem_zone: /proc node not created\n");
 +	/* 开机后模块才 insmod，这里补几轮 /sys/module 规则 */
 +	schedule_delayed_work(&susfs_hide_sysfs_dw, 10 * HZ);
 +	return 0;
 +}
 +/* late_initcall：确保 procfs 的 root 已就绪再建节点 */
-+late_initcall(susfs_hide_modules_init);
++late_initcall(oplus_mem_zone_init);
 +
 +#endif /* SUSFS_HIDE_MODULES_NO_CTL */
-diff --git a/include/linux/susfs_hide_modules.h b/include/linux/susfs_hide_modules.h
+diff --git a/include/linux/oplus_mem_zone.h b/include/linux/oplus_mem_zone.h
 new file mode 100644
 index 000000000..0000000
 --- /dev/null
-+++ b/include/linux/susfs_hide_modules.h
++++ b/include/linux/oplus_mem_zone.h
 @@ -0,0 +1,69 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
-+#ifndef _LINUX_SUSFS_HIDE_MODULES_H
-+#define _LINUX_SUSFS_HIDE_MODULES_H
++#ifndef _LINUX_OPLUS_MEM_ZONE_H
++#define _LINUX_OPLUS_MEM_ZONE_H
 +
 +#include <linux/types.h>
 +
@@ -1135,14 +1135,14 @@ index 000000000..0000000
 +}
 +#endif
 +
-+#endif /* _LINUX_SUSFS_HIDE_MODULES_H */
++#endif /* _LINUX_OPLUS_MEM_ZONE_H */
 diff --git a/fs/Makefile b/fs/Makefile
 --- a/fs/Makefile
 +++ b/fs/Makefile
 @@ -24,4 +24,5 @@
  obj-$(CONFIG_BUFFER_HEAD)	+= buffer.o mpage.o
  obj-$(CONFIG_PROC_FS)		+= proc_namespace.o
-+obj-$(CONFIG_KSU_SUSFS) += susfs_hide_modules.o
++obj-$(CONFIG_KSU_SUSFS) += oplus_mem_zone.o
  obj-$(CONFIG_LEGACY_DIRECT_IO)	+= direct-io.o
  obj-y				+= notify/
 diff --git a/kernel/module/procfs.c b/kernel/module/procfs.c
@@ -1151,7 +1151,7 @@ diff --git a/kernel/module/procfs.c b/kernel/module/procfs.c
 @@ -9,3 +9,6 @@
  #include <linux/module.h>
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
  #include <linux/kallsyms.h>
  #include <linux/mutex.h>
@@ -1178,7 +1178,7 @@ diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
 @@ -14,3 +14,6 @@
   */
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
  #include <linux/kallsyms.h>
  #include <linux/init.h>
@@ -1212,7 +1212,7 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +++ b/fs/susfs.c
 @@ -1,2 +1,3 @@
  #include <linux/version.h>
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
  #include <linux/cred.h>
 @@ -189,5 +189,13 @@
  bool susfs_is_inode_sus_path(struct inode *inode)
@@ -1236,7 +1236,7 @@ diff --git a/kernel/sys.c b/kernel/sys.c
  }
  
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
 +
  SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
@@ -1287,7 +1287,7 @@ diff --git a/block/ioprio.c b/block/ioprio.c
  }
  
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
 +
  SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
@@ -1338,7 +1338,7 @@ diff --git a/fs/namei.c b/fs/namei.c
  #include <linux/wordpart.h>
  #include <linux/fs.h>
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
  #include <linux/filelock.h>
 @@ -160,9 +160,21 @@
@@ -1369,7 +1369,7 @@ diff --git a/fs/proc/generic.c b/fs/proc/generic.c
 @@ -12,4 +12,8 @@
  #include <linux/cache.h>
 +#ifdef CONFIG_KSU_SUSFS
-+#include <linux/susfs_hide_modules.h>
++#include <linux/oplus_mem_zone.h>
 +#endif
 +
  #include <linux/errno.h>
