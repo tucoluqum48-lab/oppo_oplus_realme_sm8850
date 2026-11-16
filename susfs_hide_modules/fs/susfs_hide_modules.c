@@ -593,8 +593,9 @@ bool susfs_prio_uid_filtered(u32 uid)
 {
 	u32 app = uid % 100000;
 
-	if (!atomic_read(&prio_uid_cnt))
-		return false;		/* 默认空表：一次 atomic 读就返回 */
+	/* 默认空表：两个计数都是 0 时一次判断就返回（puid 与 papp 任一非空都要工作） */
+	if (!atomic_read(&prio_uid_cnt) && !atomic_read(&prio_app_cnt))
+		return false;
 
 	/*
 	 * 多用户：uid = userId * 100000 + appId，上面 % 100000 已归一化。
@@ -697,6 +698,10 @@ static void susfs_papp_refresh(void)
 	}
 
 	stale_idx = READ_ONCE(prio_app_active) ? 0 : 1;	/* 填另一块 */
+
+	/* 诊断计数按轮重置（否则是累计值，容易误读） */
+	atomic_set(&papp_dbg_lines, 0);
+	atomic_set(&papp_dbg_match, 0);
 
 	orig_cred = susfs_papp_enter_ksu_domain();
 
