@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,962 @@
+@@ -0,0 +1,964 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -565,6 +565,8 @@ index 000000000..0000000
 +#define SUSFS_PAPP_MAX		32
 +#define SUSFS_PAPP_LEN		64
 +static char susfs_papp_list[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
++/* 解析用的工作副本：只在 workqueue 里串行访问，放静态区避免 2KB 栈帧 */
++static char susfs_papp_work_names[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
 +static int susfs_papp_nr;
 +static DEFINE_SPINLOCK(susfs_papp_lock);
 +
@@ -638,7 +640,7 @@ index 000000000..0000000
 +{
 +	struct file *fp;
 +	char *buf = NULL;
-+	char names[SUSFS_PAPP_MAX][SUSFS_PAPP_LEN];
++	char (*names)[SUSFS_PAPP_LEN] = susfs_papp_work_names;
 +	int nr = 0, i;
 +	loff_t pos = 0;
 +	loff_t size;
