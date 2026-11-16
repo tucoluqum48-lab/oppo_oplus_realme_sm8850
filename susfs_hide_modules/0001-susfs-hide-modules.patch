@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/susfs_hide_modules.c
-@@ -0,0 +1,964 @@
+@@ -0,0 +1,965 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * susfs_hide_modules.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -659,7 +659,8 @@ index 000000000..0000000
 +
 +	fp = filp_open("/data/system/packages.list", O_RDONLY, 0);
 +	if (IS_ERR(fp)) {
-+		atomic_set(&papp_dbg_open, -1);
++		/* 记录具体 errno：-2=ENOENT -13=EACCES -5=EIO -12=ENOMEM */
++		atomic_set(&papp_dbg_open, (int)PTR_ERR(fp));
 +		return;
 +	}
 +	atomic_set(&papp_dbg_open, 1);
