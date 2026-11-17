@@ -810,6 +810,13 @@ diff --git a/fs/susfs.c b/fs/susfs.c
  #include <linux/version.h>
 +#include <linux/oplus_mem_zone.h>
  #include <linux/cred.h>
+@@ -46,4 +46,6 @@
+ #else
+ #define SUSFS_LOGI(fmt, ...) 
+ #define SUSFS_LOGE(fmt, ...) 
++#define SUSFS_LOGI_RL(fmt, ...)
++#define SUSFS_LOGE_RL(fmt, ...)
+ #endif
 @@ -364,8 +364,17 @@
  __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)
  {
