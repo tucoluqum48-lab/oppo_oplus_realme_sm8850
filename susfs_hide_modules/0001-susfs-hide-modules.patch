@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/oplus_mem_zone.c
-@@ -0,0 +1,704 @@
+@@ -0,0 +1,715 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * oplus_mem_zone.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -76,6 +76,7 @@ index 000000000..0000000
 +/* 上游 SUSFS 2.4.0 提供的内核态入口（由本补丁在 fs/susfs.c 中补充实现） */
 +extern int susfs_kernel_set_priority_apps(const char *apps);
 +extern int susfs_kernel_set_sus_path_apps(const char *apps);
++extern int susfs_kernel_set_priority_uids(const char *uids);
 +
 +static const char *const susfs_hidden_modules[] = {
 +	"none.invalid",
@@ -659,8 +660,18 @@ index 000000000..0000000
 +		return ret ? ret : count;
 +	}
 +	if (!strcmp(op, "puid")) {
-+		/* 2.4.0 起上游只接受包名；直接下发 uid 已不再支持 */
-+		return -EINVAL;
++		/* 直接按 uid 填位图：不依赖 packages.list 解析，保底路径 */
++		char *q = arg;
++
++		if (!q)
++			return -EINVAL;
++		while (*q) {
++			if (*q == ' ')
++				*q = ',';
++			q++;
++		}
++		ret = susfs_kernel_set_priority_uids(arg);
++		return ret ? ret : count;
 +	}
 +
 +	/* 裸名字等同 add，方便脚本一次写一行 */
@@ -865,7 +876,7 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +#define SUSFS_LOGI_RL(fmt, ...)
 +#define SUSFS_LOGE_RL(fmt, ...)
  #endif
-@@ -2185,6 +2185,29 @@
+@@ -2185,6 +2185,74 @@
  		SUSFS_LOGE("failed to create the thread susfs_priority_app_strings\n");
  	}
  }
@@ -890,6 +901,51 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +	kvfree(old);
 +
 +	susfs_parse_priority_app_strings();
++	return 0;
++}
++
++/* 内核态入口：直接按 uid 列表构建位图，不经过包名解析（puid 保底路径） */
++int susfs_kernel_set_priority_uids(const char *uids)
++{
++	struct susfs_priority_uid_filter_bitmap *new_bitmap, *old_bitmap = NULL;
++	char *buf, *token, *saveptr, *end;
++	unsigned int uid;
++
++	if (!uids)
++		return -EINVAL;
++
++	buf = kstrdup(uids, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	new_bitmap = kzalloc(sizeof(*new_bitmap), GFP_KERNEL);
++	if (!new_bitmap) {
++		kfree(buf);
++		return -ENOMEM;
++	}
++
++	saveptr = buf;
++	while ((token = strsep(&saveptr, ", ")) != NULL) {
++		token = strim(token);
++		if (!*token)
++			continue;
++		uid = (unsigned int)simple_strtoul(token, &end, 10);
++		if (*end)
++			continue;
++		if (uid < SUSFS_UID_FILTER_MIN_UID || uid > SUSFS_UID_FILTER_MAX_UID)
++			continue;
++		set_bit(uid - SUSFS_UID_FILTER_MIN_UID, new_bitmap->bits);
++	}
++	kfree(buf);
++
++	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
++	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap,
++			lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
++	rcu_assign_pointer(priority_uid_filter_bitmap, new_bitmap);
++	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
++	synchronize_rcu();
++	if (old_bitmap)
++		kfree_rcu(old_bitmap, rcu);
 +	return 0;
 +}
 +
