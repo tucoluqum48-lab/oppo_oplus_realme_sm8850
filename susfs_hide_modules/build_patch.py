@@ -264,6 +264,34 @@ SUSFS_C += hunk(
 )
 
 SUSFS_C += hunk(
+    2193, 2193,
+    " \tuid_t app_id = uid % 100000;\n"
+    " \n"
+    "+\t/* 隔离进程：90000~99999 不属于任何 app，一律隐藏（与原 hide_modules 行为一致） */\n"
+    "+\tif (app_id >= 90000 && app_id <= 99999)\n"
+    "+\t\treturn true;\n"
+    "+\n"
+    " \tif (app_id < SUSFS_UID_FILTER_MIN_UID ||\n"
+    " \t\tapp_id > SUSFS_UID_FILTER_MAX_UID)\n",
+)
+
+SUSFS_C += hunk(
+    2140, 2140,
+    " \tret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true);\n"
+    " \tif (ret)\n"
+    " \t\tgoto out_restore_creds;\n"
+    " \n"
+    "+\t/* 一个 uid 都没解析出来时不发布，避免用空位图覆盖 puid 已填好的过滤 */\n"
+    "+\tif (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_BITMAP_LEN)) {\n"
+    "+\t\tSUSFS_LOGE(\"no uid resolved, keep the existing bitmap\\n\");\n"
+    "+\t\tgoto out_restore_creds;\n"
+    "+\t}\n"
+    "+\n"
+    " \t/*\n"
+    " \t * The old bitmap is zeroed and the newly resolved uids are mapped into\n",
+)
+
+SUSFS_C += hunk(
     364, 364,
     " __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)\n"
     " {\n"
