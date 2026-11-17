@@ -980,6 +980,28 @@ diff --git a/fs/susfs.c b/fs/susfs.c
 +
  /*
   * Lockless lookup for the sus_path hiding path.
+@@ -2193,4 +2193,8 @@
+ 	uid_t app_id = uid % 100000;
+ 
++	/* 隔离进程：90000~99999 不属于任何 app，一律隐藏（与原 hide_modules 行为一致） */
++	if (app_id >= 90000 && app_id <= 99999)
++		return true;
++
+ 	if (app_id < SUSFS_UID_FILTER_MIN_UID ||
+ 		app_id > SUSFS_UID_FILTER_MAX_UID)
+@@ -2140,6 +2140,12 @@
+ 	ret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true);
+ 	if (ret)
+ 		goto out_restore_creds;
+ 
++	/* 一个 uid 都没解析出来时不发布，避免用空位图覆盖 puid 已填好的过滤 */
++	if (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_BITMAP_LEN)) {
++		SUSFS_LOGE("no uid resolved, keep the existing bitmap\n");
++		goto out_restore_creds;
++	}
++
+ 	/*
+ 	 * The old bitmap is zeroed and the newly resolved uids are mapped into
 @@ -364,8 +364,17 @@
  __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)
  {
