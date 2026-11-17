@@ -142,139 +142,27 @@ SUSFS_C += hunk(
     " #include <linux/cred.h>\n",
 )
 SUSFS_C += hunk(
-    189, 189,
-    " bool susfs_is_inode_sus_path(struct inode *inode)\n"
-    " #endif\n"
-    " {\n"
-    " \tstruct fuse_inode *fi = NULL;\n"
+    364, 364,
+    "__attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)\n"
+    "{\n"
+    "\tuid_t uid = current_uid().val % 100000;\n"
+    "\tstruct fuse_inode *fi = NULL;\n"
+    "\n"
     "+\t/* strict 位：hide_modules 给自己标记的路径，对所有非 root 生效\n"
     "+\t * （上游 sus_path 只对当前进程处于 umounted 状态时生效，\n"
     "+\t *   shell / system 这类非 app 进程会绕过，这里补上） */\n"
     "+\tif (inode && inode->i_mapping &&\n"
     "+\t    test_bit(AS_FLAGS_SUS_PATH_STRICT, &inode->i_mapping->flags) &&\n"
     "+\t    current_uid().val != 0 &&\n"
-    "+\t    !susfs_sus_path_uid_allowed(current_uid().val))\n"
+    "+\t    !susfs_is_uid_allowed_for_sus_path(current_uid().val))\n"
     "+\t\treturn true;\n"
-    " \tif (!susfs_is_current_proc_umounted_app()) {\n",
-)
-
-
-# ---- priority uid filter：kernel/sys.c + block/ioprio.c ----
-SYS_C = "diff --git a/kernel/sys.c b/kernel/sys.c\n--- a/kernel/sys.c\n+++ b/kernel/sys.c\n"
-SYS_C += hunk(
-    225, 225,
-    " \treturn error;\n"
-    " }\n"
-    " \n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/oplus_mem_zone.h>\n"
-    "+#endif\n"
     "+\n"
-    " SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)\n"
-    " {\n",
-)
-SYS_C += hunk(
-    259, 259,
-    " \t\tdo_each_pid_thread(pgrp, PIDTYPE_PGID, p) {\n"
-    " \t\t\terror = set_one_prio(p, niceval, error);\n"
-    " \t\t} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);\n"
-    " \t\tread_unlock(&tasklist_lock);\n"
-    " \t\tbreak;\n"
-    " \tcase PRIO_USER:\n"
-    " \t\tuid = make_kuid(cred->user_ns, who);\n"
-    " \t\tuser = cred->user;\n"
-    " \t\tif (!who)\n"
-    " \t\t\tuid = cred->uid;\n"
-    " \t\telse if (!uid_eq(uid, cred->uid)) {\n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+\t\t\tif (cred->uid.val >= 10000 &&\n"
-    "+\t\t\t    susfs_prio_uid_filtered(uid.val))\n"
-    "+\t\t\t\tgoto out_unlock;\n"
-    "+#endif\n"
-    " \t\t\tuser = find_user(uid);\n",
-)
-SYS_C += hunk(
-    326, 326,
-    " \t\tdo_each_pid_thread(pgrp, PIDTYPE_PGID, p) {\n"
-    " \t\t\tniceval = nice_to_rlimit(task_nice(p));\n"
-    " \t\t\tif (niceval > retval)\n"
-    " \t\t\t\tretval = niceval;\n"
-    " \t\t} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);\n"
-    " \t\tread_unlock(&tasklist_lock);\n"
-    " \t\tbreak;\n"
-    " \tcase PRIO_USER:\n"
-    " \t\tuid = make_kuid(cred->user_ns, who);\n"
-    " \t\tuser = cred->user;\n"
-    " \t\tif (!who)\n"
-    " \t\t\tuid = cred->uid;\n"
-    " \t\telse if (!uid_eq(uid, cred->uid)) {\n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+\t\t\tif (cred->uid.val >= 10000 &&\n"
-    "+\t\t\t    susfs_prio_uid_filtered(uid.val))\n"
-    "+\t\t\t\tgoto out_unlock;\n"
-    "+#endif\n"
-    " \t\t\tuser = find_user(uid);\n",
-)
-
-IOPRIO_C = "diff --git a/block/ioprio.c b/block/ioprio.c\n--- a/block/ioprio.c\n+++ b/block/ioprio.c\n"
-IOPRIO_C += hunk(
-    66, 66,
-    " \treturn 0;\n"
-    " }\n"
-    " \n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+#include <linux/oplus_mem_zone.h>\n"
-    "+#endif\n"
-    "+\n"
-    " SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)\n",
-)
-IOPRIO_C += hunk(
-    109, 109,
-    " \t\tcase IOPRIO_WHO_USER:\n"
-    " \t\t\tuid = make_kuid(current_user_ns(), who);\n"
-    " \t\t\tif (!uid_valid(uid))\n"
-    " \t\t\t\tbreak;\n"
-    " \t\t\tif (!who)\n"
-    " \t\t\t\tuser = current_user();\n"
-    " \t\t\telse\n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+\t\t\t{\n"
-    "+\t\t\t\tif (current_uid().val >= 10000 &&\n"
-    "+\t\t\t\t    susfs_prio_uid_filtered(uid.val))\n"
-    "+\t\t\t\t\tbreak;\n"
-    " \t\t\t\tuser = find_user(uid);\n"
-    "+\t\t\t}\n"
-    "+#else\n"
-    "+\t\t\t\tuser = find_user(uid);\n"
-    "+#endif\n"
-    " \n"
-    " \t\t\tif (!user)\n"
-    " \t\t\t\tbreak;\n",
-)
-IOPRIO_C += hunk(
-    219, 219,
-    " \t\tcase IOPRIO_WHO_USER:\n"
-    " \t\t\tuid = make_kuid(current_user_ns(), who);\n"
-    " \t\t\tif (!who)\n"
-    " \t\t\t\tuser = current_user();\n"
-    " \t\t\telse\n"
-    "+#ifdef CONFIG_KSU_SUSFS\n"
-    "+\t\t\t{\n"
-    "+\t\t\t\tif (current_uid().val >= 10000 &&\n"
-    "+\t\t\t\t    susfs_prio_uid_filtered(uid.val))\n"
-    "+\t\t\t\t\tbreak;\n"
-    " \t\t\t\tuser = find_user(uid);\n"
-    "+\t\t\t}\n"
-    "+#else\n"
-    "+\t\t\t\tuser = find_user(uid);\n"
-    "+#endif\n"
-    " \n"
-    " \t\t\tif (!user)\n"
-    " \t\t\t\tbreak;\n",
+    "\tif (uid < 10000) {\n"
+    "\t\treturn false;\n"
+    "\t}\n",
 )
 
 
-# ---- 零宽字符路径拦截：fs/namei.c ----
 NAMEI_C = "diff --git a/fs/namei.c b/fs/namei.c\n--- a/fs/namei.c\n+++ b/fs/namei.c\n"
 NAMEI_C += hunk(
     21, 21,
@@ -364,8 +252,6 @@ out = (
     + PROCFS
     + KALLSYMS
     + SUSFS_C
-    + SYS_C
-    + IOPRIO_C
     + NAMEI_C
     + GENERIC_C
 )
