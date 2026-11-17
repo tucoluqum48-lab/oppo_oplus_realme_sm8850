@@ -61,6 +61,7 @@
 /* 上游 SUSFS 2.4.0 提供的内核态入口（由本补丁在 fs/susfs.c 中补充实现） */
 extern int susfs_kernel_set_priority_apps(const char *apps);
 extern int susfs_kernel_set_sus_path_apps(const char *apps);
+extern int susfs_kernel_set_priority_uids(const char *uids);
 
 static const char *const susfs_hidden_modules[] = {
 	"none.invalid",
@@ -644,8 +645,18 @@ static ssize_t susfs_hide_write_locked(struct file *file, const char __user *ubu
 		return ret ? ret : count;
 	}
 	if (!strcmp(op, "puid")) {
-		/* 2.4.0 起上游只接受包名；直接下发 uid 已不再支持 */
-		return -EINVAL;
+		/* 直接按 uid 填位图：不依赖 packages.list 解析，保底路径 */
+		char *q = arg;
+
+		if (!q)
+			return -EINVAL;
+		while (*q) {
+			if (*q == ' ')
+				*q = ',';
+			q++;
+		}
+		ret = susfs_kernel_set_priority_uids(arg);
+		return ret ? ret : count;
 	}
 
 	/* 裸名字等同 add，方便脚本一次写一行 */
