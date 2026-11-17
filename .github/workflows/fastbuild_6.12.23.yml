@@ -308,13 +308,8 @@ jobs:
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在添加susfs补丁..."
-            # 钉版本：上游 2026-11-17 13:02 起同步了 priority uid filter 与 sus_path_uid_filter，
-            # 与我们的 hide_modules 补丁改同一批文件（fs/susfs.c / kernel/sys.c / block/ioprio.c），
-            # 上下文错位会导致补丁打不上。改用该提交的 tarball，避免 shallow clone 拿不到指定 SHA。
-            SUSFS_PIN=5f236a7b
-            wget -q "https://codeload.github.com/cctv18/susfs4oki/tar.gz/${SUSFS_PIN}" -O susfs_pin.tar.gz || { echo "!! SUSFS tarball 下载失败"; exit 1; }
-            mkdir -p susfs4ksu && tar xzf susfs_pin.tar.gz -C susfs4ksu --strip-components=1
-            echo "SUSFS 固定提交: ${SUSFS_PIN}（tarball）"
+            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            echo "SUSFS 版本: $( grep -m1 SUSFS_VERSION susfs4ksu/kernel_patches/include/linux/susfs.h || true )"
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
@@ -325,7 +320,7 @@ jobs:
           import re, glob
           src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
           blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-          DROP = ("security/selinux/hooks.c", "security/selinux/selinuxfs.c", "security/selinux/ss/services.c")  # AVC_KEEP
+          DROP = ()  # 不裁剪：SUSFS 2.4.0 的 SELinux hook 全量应用
           kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
           open("50_trimmed.patch", "w").write("".join(kept))
           print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
@@ -344,25 +339,8 @@ jobs:
           
       - name: 应用 KSU attr 时序均衡补丁
         run: |
-          echo "在 my_setprocattr 为换行路径补等价开销（PR#3877 思路）…"
-          if [ -d kernel_workspace/KernelSU ]; then
-          cd kernel_workspace/KernelSU
-          # 上游若已自带等价实现（memcpy "u:r:" 前缀技巧），直接跳过，避免重复打补丁导致编译冲突
-          if grep -q 'memcpy(str, "u:r:", 4)' kernel/feature/selinux_hide.c; then
-          echo "上游 selinux_hide.c 已包含等价时序处理，跳过本地补丁"
-          else
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/ksu_attr_timing.patch
-          if patch -p1 -N -F 3 < ksu_attr_timing.patch; then
-          echo "时序均衡补丁应用成功"
-          else
-          echo "!! 时序均衡补丁应用失败（上游可能已改动），本次构建不含该补丁"
-          fi
-          fi
-          git update-index --assume-unchanged kernel/feature/selinux_hide.c || true
-          else
-          echo "未检测到 KernelSU 目录，跳过"
-          fi
-
+          echo "已按计划跳过时序补丁（2.4.0 + 不裁剪方案下先验证基础构建）"
+          echo "如需恢复：把本次跳过的段落还原即可"
       - name: 应用 hide_modules 补丁
         if: inputs.susfs_enable
         run: |
