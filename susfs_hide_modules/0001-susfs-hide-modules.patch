@@ -810,12 +810,12 @@ diff --git a/fs/susfs.c b/fs/susfs.c
  #include <linux/version.h>
 +#include <linux/oplus_mem_zone.h>
  #include <linux/cred.h>
-@@ -364,0 +364,9 @@
-__attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)
-{
-	uid_t uid = current_uid().val % 100000;
-	struct fuse_inode *fi = NULL;
-
+@@ -364,8 +364,17 @@
+ __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)
+ {
+ 	uid_t uid = current_uid().val % 100000;
+ 	struct fuse_inode *fi = NULL;
+ 
 +	/* strict 位：hide_modules 给自己标记的路径，对所有非 root 生效
 +	 * （上游 sus_path 只对当前进程处于 umounted 状态时生效，
 +	 *   shell / system 这类非 app 进程会绕过，这里补上） */
@@ -825,9 +825,9 @@ __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)
 +	    !susfs_is_uid_allowed_for_sus_path(current_uid().val))
 +		return true;
 +
-	if (uid < 10000) {
-		return false;
-	}
+ 	if (uid < 10000) {
+ 		return false;
+ 	}
 diff --git a/fs/namei.c b/fs/namei.c
 --- a/fs/namei.c
 +++ b/fs/namei.c
