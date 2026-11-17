@@ -626,17 +626,21 @@ static ssize_t susfs_hide_write_locked(struct file *file, const char __user *ubu
 	 * papp / sallow：把包名交给上游 SUSFS 2.4.0 的过滤实现
 	 * （上游按包名解析 uid，自己维护位图与重新解析线程）
 	 */
-	if (!strcmp(op, "papp")) {
-		if (!arg)
+	if (!strcmp(op, "papp") || !strcmp(op, "sallow")) {
+		/* 上游解析器按逗号切分包名，这里把空格统一转成逗号 */
+		char *q = arg;
+
+		if (!q)
 			return -EINVAL;
-		ret = susfs_kernel_set_priority_apps(arg);
-		return ret ? ret : count;
-	}
-	if (!strcmp(op, "sallow")) {
-		/* sallow clear → 传空串，等价于清空白名单 */
-		if (!arg)
-			return -EINVAL;
-		ret = susfs_kernel_set_sus_path_apps(arg);
+		while (*q) {
+			if (*q == ' ')
+				*q = ',';
+			q++;
+		}
+		if (!strcmp(op, "papp"))
+			ret = susfs_kernel_set_priority_apps(arg);
+		else
+			ret = susfs_kernel_set_sus_path_apps(arg);
 		return ret ? ret : count;
 	}
 	if (!strcmp(op, "puid")) {
