@@ -439,11 +439,9 @@ jobs:
           # 添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
-          # 关闭模块签名校验：未签名模块（qpace/yukizygisk 等）加载时不再置
-          # TAINT_UNSIGNED_MODULE(8192)，tainted 更接近原厂基线；
-          # SIG_FORCE 本就没开，关掉不改变模块加载的放行行为。
-          echo "# CONFIG_MODULE_SIG is not set" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "# CONFIG_MODULE_SIG_ALL is not set" >> ./common/arch/arm64/configs/gki_defconfig
+          # 注意：不要关闭 CONFIG_MODULE_SIG。
+          # 实测关闭后 struct module 布局变化，与厂商预编译 DLKM 的 ABI 不兼容，
+          # 表现为相机异常、电量显示 0、无法充电。taint 的 E 位就让它留着。
           if [[ "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
             echo "CONFIG_ZSMALLOC=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
