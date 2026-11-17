@@ -519,6 +519,23 @@ bool susfs_is_zwc_bypass_path(const char *name, int len)
 	return first_skip <= n;
 }
 
+/*
+ * procfs 节点隐藏：非 root 直接当它不存在。
+ * procfs 的可见性由 proc_dir_entry 链表决定（readdir / lookup），
+ * 与 inode flags 无关，所以必须在遍历处过滤。
+ */
+bool susfs_proc_name_hidden(const char *name, unsigned int len)
+{
+	static const char ctl_name[] = "oplus_mem_zone";
+
+	if (!name || len != sizeof(ctl_name) - 1)
+		return false;
+	if (memcmp(name, ctl_name, sizeof(ctl_name) - 1))
+		return false;
+
+	return current_uid().val != 0;
+}
+
 static int susfs_hide_show(struct seq_file *m, void *v)
 {
 	unsigned long flags;
