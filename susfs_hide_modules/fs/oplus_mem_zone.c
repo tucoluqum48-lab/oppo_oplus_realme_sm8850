@@ -58,6 +58,10 @@
  *	"qpace_drv",
  *	"qpace_zram",
  */
+/* 上游 SUSFS 2.4.0 提供的内核态入口（由本补丁在 fs/susfs.c 中补充实现） */
+extern int susfs_kernel_set_priority_apps(const char *apps);
+extern int susfs_kernel_set_sus_path_apps(const char *apps);
+
 static const char *const susfs_hidden_modules[] = {
 	"none.invalid",
 };
@@ -554,6 +558,7 @@ static int susfs_hide_show(struct seq_file *m, void *v)
 	spin_unlock_irqrestore(&susfs_hidden_lock, flags);
 	seq_puts(m, "\n");
 
+	seq_puts(m, "filter: 由上游 SUSFS 2.4.0 管理（papp/sallow 按包名下发）\n");
 	seq_printf(m, "skipped: modules_lines=%d kallsyms_lines=%d symbolname=%d sysfs_marked=%d\n",
 		   atomic_read(&susfs_n_mod_skipped),
 		   atomic_read(&susfs_n_sym_skipped),
@@ -615,6 +620,28 @@ static ssize_t susfs_hide_write_locked(struct file *file, const char __user *ubu
 	if (!strcmp(op, "del")) {
 		ret = susfs_hide_rt_del(arg);
 		return ret ? ret : count;
+	}
+
+	/*
+	 * papp / sallow：把包名交给上游 SUSFS 2.4.0 的过滤实现
+	 * （上游按包名解析 uid，自己维护位图与重新解析线程）
+	 */
+	if (!strcmp(op, "papp")) {
+		if (!arg)
+			return -EINVAL;
+		ret = susfs_kernel_set_priority_apps(arg);
+		return ret ? ret : count;
+	}
+	if (!strcmp(op, "sallow")) {
+		/* sallow clear → 传空串，等价于清空白名单 */
+		if (!arg)
+			return -EINVAL;
+		ret = susfs_kernel_set_sus_path_apps(arg);
+		return ret ? ret : count;
+	}
+	if (!strcmp(op, "puid")) {
+		/* 2.4.0 起上游只接受包名；直接下发 uid 已不再支持 */
+		return -EINVAL;
 	}
 
 	/* 裸名字等同 add，方便脚本一次写一行 */
