@@ -141,13 +141,90 @@ SUSFS_C += hunk(
     "+#include <linux/oplus_mem_zone.h>\n"
     " #include <linux/cred.h>\n",
 )
+# 2.4.0 的 #else 分支只定义了 SUSFS_LOGI/LOGE，漏了 RL 两个宏；
+# 未开启 CONFIG_KSU_SUSFS_ENABLE_LOG 时会编译失败，这里补上空定义。
+SUSFS_C += hunk(
+    46, 46,
+    " #else\n"
+    " #define SUSFS_LOGI(fmt, ...) \n"
+    " #define SUSFS_LOGE(fmt, ...) \n"
+    "+#define SUSFS_LOGI_RL(fmt, ...)\n"
+    "+#define SUSFS_LOGE_RL(fmt, ...)\n"
+    " #endif\n",
+)
+
+SUSFS_C += hunk(
+    2185, 2185,
+    " \t\tSUSFS_LOGE(\"failed to create the thread susfs_priority_app_strings\\n\");\n"
+    " \t}\n"
+    " }\n"
+    " \n"
+    "+/* 内核态入口：供 /proc/oplus_mem_zone 下发包名时使用（等价于 supercall 版本的 setter）\n"
+    "+ * 只更新包名缓冲并触发重新解析，位图构建与 uid 解析完全复用上游实现。 */\n"
+    "+int susfs_kernel_set_priority_apps(const char *apps)\n"
+    "+{\n"
+    "+\tchar *dup, *old;\n"
+    "+\n"
+    "+\tif (!apps)\n"
+    "+\t\treturn -EINVAL;\n"
+    "+\n"
+    "+\tdup = kstrdup(apps, GFP_KERNEL);\n"
+    "+\tif (!dup)\n"
+    "+\t\treturn -ENOMEM;\n"
+    "+\n"
+    "+\tmutex_lock(&susfs_mutex_lock_priority_uid_filter);\n"
+    "+\told = susfs_priority_app_strings;\n"
+    "+\tsusfs_priority_app_strings = dup;\n"
+    "+\tmutex_unlock(&susfs_mutex_lock_priority_uid_filter);\n"
+    "+\tkvfree(old);\n"
+    "+\n"
+    "+\tsusfs_parse_priority_app_strings();\n"
+    "+\treturn 0;\n"
+    "+}\n"
+    "+\n"
+    " /*\n"
+    "  * Lockless lookup for the getpriority/setpriority syscall path.\n",
+)
+
+SUSFS_C += hunk(
+    803, 803,
+    " \t\tSUSFS_LOGE(\"failed to create the thread susfs_sus_path_app_strings\\n\");\n"
+    " \t}\n"
+    " }\n"
+    " \n"
+    "+/* 内核态入口：sus_path uid 白名单（按包名，等价于 supercall 版本） */\n"
+    "+int susfs_kernel_set_sus_path_apps(const char *apps)\n"
+    "+{\n"
+    "+\tchar *dup, *old;\n"
+    "+\n"
+    "+\tif (!apps)\n"
+    "+\t\treturn -EINVAL;\n"
+    "+\n"
+    "+\tdup = kstrdup(apps, GFP_KERNEL);\n"
+    "+\tif (!dup)\n"
+    "+\t\treturn -ENOMEM;\n"
+    "+\n"
+    "+\tmutex_lock(&susfs_mutex_lock_sus_path_uid_filter);\n"
+    "+\told = susfs_sus_path_app_strings;\n"
+    "+\tsusfs_sus_path_app_strings = dup;\n"
+    "+\tmutex_unlock(&susfs_mutex_lock_sus_path_uid_filter);\n"
+    "+\tkvfree(old);\n"
+    "+\n"
+    "+\tsusfs_parse_sus_path_app_strings();\n"
+    "+\treturn 0;\n"
+    "+}\n"
+    "+\n"
+    " /*\n"
+    "  * Lockless lookup for the sus_path hiding path.\n",
+)
+
 SUSFS_C += hunk(
     364, 364,
-    "__attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)\n"
-    "{\n"
-    "\tuid_t uid = current_uid().val % 100000;\n"
-    "\tstruct fuse_inode *fi = NULL;\n"
-    "\n"
+    " __attribute__((hot)) bool susfs_is_inode_sus_path(struct inode *inode)\n"
+    " {\n"
+    " \tuid_t uid = current_uid().val % 100000;\n"
+    " \tstruct fuse_inode *fi = NULL;\n"
+    " \n"
     "+\t/* strict 位：hide_modules 给自己标记的路径，对所有非 root 生效\n"
     "+\t * （上游 sus_path 只对当前进程处于 umounted 状态时生效，\n"
     "+\t *   shell / system 这类非 app 进程会绕过，这里补上） */\n"
@@ -157,9 +234,9 @@ SUSFS_C += hunk(
     "+\t    !susfs_is_uid_allowed_for_sus_path(current_uid().val))\n"
     "+\t\treturn true;\n"
     "+\n"
-    "\tif (uid < 10000) {\n"
-    "\t\treturn false;\n"
-    "\t}\n",
+    " \tif (uid < 10000) {\n"
+    " \t\treturn false;\n"
+    " \t}\n",
 )
 
 
