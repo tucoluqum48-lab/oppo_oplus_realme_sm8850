@@ -309,6 +309,11 @@ jobs:
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在添加susfs补丁..."
             git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            # 钉版本：上游 2026-11-17 13:02 起同步了 priority uid filter 与 sus_path_uid_filter，
+            # 与我们的 hide_modules 补丁改同一批文件（fs/susfs.c / kernel/sys.c / block/ioprio.c），
+            # 会导致补丁上下文错位。先钉在已知可构建的提交上。
+            ( cd susfs4ksu && git fetch --depth=1 origin 5f236a7b && git checkout -q 5f236a7b ) || echo "!! SUSFS 版本钉定失败，继续用分支 HEAD"
+            echo "SUSFS 使用提交: $( cd susfs4ksu && git rev-parse --short HEAD )"
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
