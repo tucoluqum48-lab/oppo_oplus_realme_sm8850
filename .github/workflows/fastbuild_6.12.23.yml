@@ -304,9 +304,6 @@ jobs:
 
       - name: 补齐 SUSFS 2.4.0 缺失的 Kconfig 项
         run: |
-          # BakaSU 的 kernel/Kconfig 里没有 2.4.0 新增的 KSU_SUSFS_PRIORITY_UID_FILTER，
-          # defconfig 写了也会被 Kconfig 丢弃，导致 susfs.c 里对应代码被 #ifdef 编译掉，
-          # 我们节点调用的 susfs_kernel_set_priority_apps 就会变成未定义符号。
           KC=""
           for f in kernel_workspace/KernelSU/kernel/Kconfig kernel_workspace/KernelSU/Kconfig; do
             [ -f "$f" ] && KC="$f" && break
@@ -314,29 +311,10 @@ jobs:
           if [ -z "$KC" ]; then echo "!! 找不到 KernelSU 的 Kconfig"; exit 1; fi
           echo "Kconfig: $KC"
           if grep -q 'KSU_SUSFS_PRIORITY_UID_FILTER' "$KC"; then
-            echo "已存在 PRIORITY_UID_FILTER 配置项，跳过"
+            echo "已存在，跳过"
           else
-            python3 - "$KC" <<'PYEOF'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-block = """
-config KSU_SUSFS_PRIORITY_UID_FILTER
-    bool "Enable priority uid filter for getpriority/ioprio syscalls"
-    depends on KSU_SUSFS
-    default y
-    help
-        - Filter getpriority/setpriority/ioprio_get/ioprio_set results by app package names.
-        - Package names are resolved to uids inside the kernel and refreshed periodically.
-
-"""
-i = s.rfind("\nendmenu")
-if i < 0:
-    raise SystemExit("Kconfig 结构异常：找不到 endmenu")
-s = s[:i] + block + s[i:]
-open(p, "w").write(s)
-print("已插入 KSU_SUSFS_PRIORITY_UID_FILTER 配置项")
-PYEOF
+            printf '\nconfig KSU_SUSFS_PRIORITY_UID_FILTER\n    bool "Enable priority uid filter for getpriority and ioprio syscalls"\n    depends on KSU_SUSFS\n    default y\n    help\n        - Filter getpriority, setpriority, ioprio_get and ioprio_set by app package names.\n        - Package names are resolved to uids inside the kernel and refreshed periodically.\n' >> "$KC"
+            echo "已追加 KSU_SUSFS_PRIORITY_UID_FILTER 配置块"
           fi
           grep -n 'KSU_SUSFS_PRIORITY_UID_FILTER' "$KC" | head -2
 
