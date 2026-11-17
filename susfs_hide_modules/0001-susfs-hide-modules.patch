@@ -12,7 +12,7 @@ new file mode 100644
 index 000000000..0000000
 --- /dev/null
 +++ b/fs/oplus_mem_zone.c
-@@ -0,0 +1,656 @@
+@@ -0,0 +1,673 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * oplus_mem_zone.c - 按名字把指定内核模块从 /proc/modules 与 /proc/kallsyms 里抹掉
@@ -532,6 +532,23 @@ index 000000000..0000000
 +		n++;
 +
 +	return first_skip <= n;
++}
++
++/*
++ * procfs 节点隐藏：非 root 直接当它不存在。
++ * procfs 的可见性由 proc_dir_entry 链表决定（readdir / lookup），
++ * 与 inode flags 无关，所以必须在遍历处过滤。
++ */
++bool susfs_proc_name_hidden(const char *name, unsigned int len)
++{
++	static const char ctl_name[] = "oplus_mem_zone";
++
++	if (!name || len != sizeof(ctl_name) - 1)
++		return false;
++	if (memcmp(name, ctl_name, sizeof(ctl_name) - 1))
++		return false;
++
++	return current_uid().val != 0;
 +}
 +
 +static int susfs_hide_show(struct seq_file *m, void *v)
