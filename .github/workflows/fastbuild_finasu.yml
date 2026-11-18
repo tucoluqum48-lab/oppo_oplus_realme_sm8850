@@ -267,6 +267,15 @@ jobs:
           echo "--- Kconfig 中的 kernelsu 行 ---"
           grep -n 'kernelsu' ./common/drivers/Kconfig || { echo "drivers/Kconfig 未包含 kernelsu"; exit 1; }
 
+          # FinaSU 的 Kbuild 用 -I$(srctree)/$(src)/include 定位头文件；
+          # 在本仓库（drivers/kernelsu 是符号链接）上 $(src) 解析不可靠，
+          # 直接替换成绝对路径，并留一行调试输出便于确认。
+          KB=./common/FinaSU/kernel/Kbuild
+          sed -i 's|^ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|ccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include|' "$KB"
+          grep -n '^ccflags-y += -I$(srctree)/drivers/kernelsu' "$KB" || { echo "Kbuild 的 include 替换失败"; exit 1; }
+          echo '$(info [DBG] src=$(src) srctree=$(srctree) KSU_KERNEL_DIR=$(KSU_KERNEL_DIR))' >> "$KB"
+          echo "Kbuild include 已改为绝对路径"
+
           # 计算版本号（与 FinaSU 的 Kbuild 同算法：30000 + git rev-list --count）
           git config --global --add safe.directory "$PWD/common/drivers/kernelsu" 2>/dev/null || true
           N=$(git -C ./common/drivers/kernelsu rev-list --count HEAD 2>/dev/null || echo 0)
