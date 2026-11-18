@@ -260,9 +260,11 @@ jobs:
           ( cd ./common && sh /tmp/finasu_setup.sh "${FINASU_REF}" ) || { echo "FinaSU setup 失败"; exit 1; }
 
           echo "=== 集成结果 ==="
-          ls -l ./common/drivers/kernelsu 2>/dev/null || true
-          grep -n 'drivers/kernelsu' ./common/drivers/Makefile || { echo "drivers/Makefile 未改动"; exit 1; }
-          grep -n 'drivers/kernelsu' ./common/drivers/Kconfig || { echo "drivers/Kconfig 未改动"; exit 1; }
+          ls -l ./common/drivers/kernelsu || { echo "symlink 未创建"; exit 1; }
+          echo "--- Makefile 中的 kernelsu 行 ---"
+          grep -n 'kernelsu' ./common/drivers/Makefile || { echo "drivers/Makefile 未包含 kernelsu"; exit 1; }
+          echo "--- Kconfig 中的 kernelsu 行 ---"
+          grep -n 'kernelsu' ./common/drivers/Kconfig || { echo "drivers/Kconfig 未包含 kernelsu"; exit 1; }
 
           # 计算版本号（与 FinaSU 的 Kbuild 同算法：30000 + git rev-list --count）
           git config --global --add safe.directory "$PWD/common/drivers/kernelsu" 2>/dev/null || true
