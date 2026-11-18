@@ -273,6 +273,9 @@ jobs:
           KB=./common/FinaSU/kernel/Kbuild
           sed -i 's|^ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|ccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include|' "$KB"
           grep -n '^ccflags-y += -I$(srctree)/drivers/kernelsu' "$KB" || { echo "Kbuild 的 include 替换失败"; exit 1; }
+          # 同理，KSU_KERNEL_DIR 也解析成 ../../drivers/kernelsu（相对 out 无效），
+          # preinit/runner 规则会因此找不到源文件 → 直接覆盖成 $(srctree) 版
+          printf '\n# [FinaSU-line] 修正相对路径（O=out 下 $(src) 不可靠）\nKSU_KERNEL_DIR := $(srctree)/drivers/kernelsu\n' >> "$KB"
           echo '$(info [DBG] src=$(src) srctree=$(srctree) KSU_KERNEL_DIR=$(KSU_KERNEL_DIR))' >> "$KB"
           echo "Kbuild include 已改为绝对路径"
 
