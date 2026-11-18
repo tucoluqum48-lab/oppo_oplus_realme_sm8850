@@ -281,6 +281,7 @@ jobs:
           N=$(git -C ./common/drivers/kernelsu rev-list --count HEAD 2>/dev/null || echo 0)
           KSU_VERSION=$((30000 + N))
           echo "KSU_VERSION=${KSU_VERSION}" >> $GITHUB_ENV
+          echo "KSUVER=${KSU_VERSION}" >> $GITHUB_ENV
           echo "ksuver=${KSU_VERSION}" >> $GITHUB_OUTPUT
           echo "FinaSU 集成完成，版本号 ${KSU_VERSION}"
 
@@ -716,7 +717,9 @@ jobs:
             echo "未找到内核镜像文件，构建可能出错"
             exit 1
           fi
-          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            KSU_TYPENAME="FinaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
