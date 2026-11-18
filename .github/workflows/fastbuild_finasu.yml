@@ -12,11 +12,12 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认BakaSU)'
+        description: 'root 实现（本线固定 FinaSU；选 bakasu/sukisu/ksunext/ksu/none 均会被忽略并仍集成 FinaSU）'
         required: true
         type: choice
-        default: 'bakasu'
+        default: 'finasu'
         options:
+          - 'finasu'
           - 'bakasu'
           - 'sukisu'
           - 'ksunext'
