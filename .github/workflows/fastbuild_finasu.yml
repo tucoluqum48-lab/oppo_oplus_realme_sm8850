@@ -315,6 +315,18 @@ jobs:
           ls -l include/linux/susfs.h include/linux/susfs_def.h fs/susfs.c || { echo "SUSFS 文件缺失"; exit 1; }
           echo "susfs_add_sus_type 出现次数: $(grep -c 'susfs_add_sus_type' fs/susfs.c || true)"
 
+      - name: 生成 UAPI 头（FinaSU preinit 依赖）
+        if: inputs.susfs_enable
+        run: |
+          cd kernel_workspace/common
+          # SUSFS 补丁在 fs/exec.c 调用了 ksu_preinit_*；FinaSU 仅在
+          # $(objtree)/usr/include/linux/unistd.h 存在时编译 preinit → 先生成 UAPI 头
+          echo "----- 生成 UAPI 头（供 FinaSU preinit 使用）-----"
+          make ARCH=arm64 O=out headers_install INSTALL_HDR_PATH="$PWD/out/usr" >/tmp/hdr.log 2>&1 || {
+            echo "headers_install 失败，末尾日志："; tail -15 /tmp/hdr.log; exit 1; }
+          ls -l out/usr/include/linux/unistd.h || { echo "unistd.h 未生成"; exit 1; }
+          echo "UAPI 头就绪"
+
       - name: 应用 KSU attr 时序均衡补丁（FinaSU 线跳过）
         run: |
           echo "FinaSU 实验线：跳过「应用 KSU attr 时序均衡补丁」"
