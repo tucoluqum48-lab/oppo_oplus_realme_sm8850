@@ -289,9 +289,31 @@ jobs:
         run: |
           echo "FinaSU 实验线：跳过「补齐 SUSFS 2.4.0 缺失的 Kconfig 项」"
 
-      - name: 应用 KernelSU & SUSFS 补丁（FinaSU 线跳过）
+      - name: 应用 SUSFS 内核补丁（FinaSU 线）
+        if: inputs.susfs_enable
         run: |
-          echo "FinaSU 实验线：跳过「应用 KernelSU & SUSFS 补丁」"
+          cd kernel_workspace
+          echo "添加 susfs4oki 内核补丁（FinaSU 自带 supercall 集成，不需要 10_enable）..."
+          git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+          echo "SUSFS 版本: $( grep -m1 SUSFS_VERSION susfs4ksu/kernel_patches/include/linux/susfs.h || true )"
+          cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
+          cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cd ./common
+          python3 - <<'PYTRIM'
+          import re, glob
+          src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
+          blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
+          DROP = ("security/selinux/hooks.c", "security/selinux/selinuxfs.c",
+                  "security/selinux/ss/services.c", "security/selinux/status.c")
+          kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
+          open("50_trimmed.patch", "w").write("".join(kept))
+          print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
+          PYTRIM
+          patch -p1 -F 3 < 50_trimmed.patch || true
+          echo "=== 确认 SUSFS 文件就位 ==="
+          ls -l include/linux/susfs.h include/linux/susfs_def.h fs/susfs.c || { echo "SUSFS 文件缺失"; exit 1; }
+          echo "susfs_add_sus_type 出现次数: $(grep -c 'susfs_add_sus_type' fs/susfs.c || true)"
 
       - name: 应用 KSU attr 时序均衡补丁（FinaSU 线跳过）
         run: |
