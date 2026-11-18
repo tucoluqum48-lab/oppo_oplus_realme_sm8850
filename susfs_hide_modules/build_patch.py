@@ -282,7 +282,7 @@ SUSFS_C += hunk(
     " \t\tgoto out_restore_creds;\n"
     " \n"
     "+\t/* 一个 uid 都没解析出来时不发布，避免用空位图覆盖 puid 已填好的过滤 */\n"
-    "+\tif (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_BITMAP_LEN)) {\n"
+    "+\tif (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_UID_NUM)) {\n"
     "+\t\tSUSFS_LOGE(\"no uid resolved, keep the existing bitmap\\n\");\n"
     "+\t\tgoto out_restore_creds;\n"
     "+\t}\n"
