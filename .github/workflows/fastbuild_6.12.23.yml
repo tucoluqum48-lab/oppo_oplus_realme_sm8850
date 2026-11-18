@@ -317,6 +317,11 @@ jobs:
             echo "已追加 KSU_SUSFS_PRIORITY_UID_FILTER 配置块"
           fi
           grep -n 'KSU_SUSFS_PRIORITY_UID_FILTER' "$KC" | head -2
+          # 若不隐藏这处改动，KernelSU 的 git describe 会带 -dirty，版本串会显示 dirty
+          if [ -d kernel_workspace/KernelSU/.git ]; then
+            ( cd kernel_workspace/KernelSU && git update-index --assume-unchanged kernel/Kconfig 2>/dev/null || true )
+            echo "已对 KernelSU/kernel/Kconfig 设置 assume-unchanged"
+          fi
 
       - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
