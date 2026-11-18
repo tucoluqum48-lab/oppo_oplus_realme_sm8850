@@ -995,7 +995,7 @@ diff --git a/fs/susfs.c b/fs/susfs.c
  		goto out_restore_creds;
  
 +	/* 一个 uid 都没解析出来时不发布，避免用空位图覆盖 puid 已填好的过滤 */
-+	if (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_BITMAP_LEN)) {
++	if (bitmap_empty(new_bitmap->bits, SUSFS_UID_FILTER_UID_NUM)) {
 +		SUSFS_LOGE("no uid resolved, keep the existing bitmap\n");
 +		goto out_restore_creds;
 +	}
