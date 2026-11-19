@@ -328,6 +328,32 @@ jobs:
           ls -l include/linux/susfs.h include/linux/susfs_def.h fs/susfs.c || { echo "SUSFS 文件缺失"; exit 1; }
           echo "susfs_add_sus_type 出现次数: $(grep -c 'susfs_add_sus_type' fs/susfs.c || true)"
 
+      - name: 应用 hide_modules 补丁（FinaSU 线）
+        if: inputs.susfs_enable
+        run: |
+          echo "内建 hide_modules：模块名/符号/sysfs 隐藏 + /proc/oplus_mem_zone 节点…"
+          cd kernel_workspace/common
+          # 必须先有 susfs 主补丁落地的 fs/susfs.c（我们的桥接要挂进去）
+          [ -f fs/susfs.c ] || { echo "susfs 主补丁未应用：fs/susfs.c 不存在"; exit 1; }
+          grep -q susfs fs/Makefile || { echo "susfs 主补丁未应用：fs/Makefile 无 susfs 目标"; exit 1; }
+
+          BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/susfs_hide_modules"
+          wget -q "$BASE/0001-susfs-hide-modules.patch?v=$(date +%s)" -O ../hide_modules.patch || { echo "拉取补丁失败"; exit 1; }
+          echo "补丁大小: $(wc -c < ../hide_modules.patch) 字节"
+
+          if git apply --whitespace=nowarn ../hide_modules.patch; then
+            echo "补丁应用：git apply"
+          else
+            echo "git apply 失败，回退 patch -F 3"
+            patch -p1 -F 3 < ../hide_modules.patch || { echo "hide_modules 补丁打不上"; exit 1; }
+          fi
+
+          echo "=== 校验落地 ==="
+          ls -l fs/oplus_mem_zone.c include/linux/oplus_mem_zone.h
+          grep -c 'oplus_mem_zone' fs/Makefile
+          grep -c 'susfs_kernel_set_priority_uids' fs/susfs.c
+          echo "hide_modules 应用完成"
+
       - name: 生成 UAPI 头（FinaSU preinit 依赖）
         if: inputs.susfs_enable
         run: |
@@ -343,10 +369,6 @@ jobs:
       - name: 应用 KSU attr 时序均衡补丁（FinaSU 线跳过）
         run: |
           echo "FinaSU 实验线：跳过「应用 KSU attr 时序均衡补丁」"
-
-      - name: 应用 hide_modules 补丁（FinaSU 线跳过）
-        run: |
-          echo "FinaSU 实验线：跳过「应用 hide_modules 补丁」"
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
         if: inputs.lz4_enable
