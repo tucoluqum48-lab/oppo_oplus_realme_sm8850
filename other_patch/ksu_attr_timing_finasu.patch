@@ -1,27 +1,30 @@
 --- a/kernel/feature/selinux_hide.c
 +++ b/kernel/feature/selinux_hide.c
-@@ -269,6 +269,24 @@
+@@ -269,6 +269,27 @@
                  return backup_error ?: error;
          } else if (error) {
              return error;
 +        }
-+    } else if (size >= 1) {
++    } else if (size >= 4) {
 +        /*
-+         * 时序均衡 v2：换行前缀路径原本完全跳过策略解析，
-+         * 与正常路径差出一次完整的 context→sid 解析，形成侧信道。
-+         * 这里跳过前导换行后，用与正常路径相同的函数做一次解析，
-+         * 结果丢弃（sid 保持 0），行为仍是原来的 -EINVAL。
++         * 时序均衡：换行前缀路径原本完全跳过策略解析，
++         * 两条探测路径的耗时差出整个 lookup，形成侧信道。
++         * 这里强制做一次等价开销的解析（必然在第一个分量失败的串），
++         * backup_sepolicy 为空时用 prepare_creds 兜底，保持开销接近。
 +         */
-+        char *probe = str;
-+        size_t probe_len = size;
-+        while (probe_len && probe[0] == '\n') { probe++; probe_len--; }
-+        if (probe_len && probe[probe_len - 1] == '\n') {
-+            probe[probe_len - 1] = 0;
-+            probe_len--;
++        if (str[size - 1] == '\n') {
++            str[size - 1] = 0;
++            size--;
 +        }
-+        if (probe_len) {
-+            u32 probe_sid = 0;
-+            (void)security_context_to_sid_live(probe, (u32)probe_len, &probe_sid);
++        memcpy(str, "z:", 2);
++        if (backup_sepolicy) {
++            (void)security_context_to_sid_with_policy(backup_sepolicy, str, size,
++                                                      &backup_sid, SECSID_NULL,
++                                                      GFP_KERNEL, NULL, NULL);
++        } else {
++            struct cred *tmp_cred = prepare_creds();
++            if (tmp_cred)
++                abort_creds(tmp_cred);
          }
      }
  
