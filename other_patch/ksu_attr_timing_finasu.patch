@@ -1,0 +1,30 @@
+--- a/kernel/feature/selinux_hide.c
++++ b/kernel/feature/selinux_hide.c
+@@ -269,6 +269,27 @@
+                 return backup_error ?: error;
+         } else if (error) {
+             return error;
++        }
++    } else if (size >= 4) {
++        /*
++         * 时序均衡：换行前缀路径原本完全跳过策略解析，
++         * 两条探测路径的耗时差出整个 lookup，形成侧信道。
++         * 这里强制做一次等价开销的解析（必然在第一个分量失败的串），
++         * backup_sepolicy 为空时用 prepare_creds 兜底，保持开销接近。
++         */
++        if (str[size - 1] == '\n') {
++            str[size - 1] = 0;
++            size--;
++        }
++        memcpy(str, "z:", 2);
++        if (backup_sepolicy) {
++            (void)security_context_to_sid_with_policy(backup_sepolicy, str, size,
++                                                      &backup_sid, SECSID_NULL,
++                                                      GFP_KERNEL, NULL, NULL);
++        } else {
++            struct cred *tmp_cred = prepare_creds();
++            if (tmp_cred)
++                abort_creds(tmp_cred);
+         }
+     }
+ 
