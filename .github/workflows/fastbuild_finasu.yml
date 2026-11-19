@@ -392,9 +392,25 @@ jobs:
           ls -l out/usr/include/linux/unistd.h || { echo "unistd.h 未生成"; exit 1; }
           echo "UAPI 头就绪"
 
-      - name: 应用 KSU attr 时序均衡补丁（FinaSU 线跳过）
+      - name: 应用 KSU attr 时序均衡补丁（FinaSU 线）
         run: |
-          echo "FinaSU 实验线：跳过「应用 KSU attr 时序均衡补丁」"
+          echo "给 FinaSU 的 my_setprocattr 补时序均衡（侧信道检测用）…"
+          cd kernel_workspace/common
+          D=drivers/kernelsu
+          F=$D/feature/selinux_hide.c
+          [ -f "$F" ] || { echo "找不到 $F，跳过"; exit 0; }
+          if grep -q '时序均衡' "$F"; then
+            echo "已包含时序均衡，跳过"
+          else
+            BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch"
+            wget -q "$BASE/ksu_attr_timing_finasu.patch?v=$(date +%s)" -O /tmp/timing_finasu.patch || { echo "拉取补丁失败"; exit 1; }
+            if patch -p2 -d "$D" -F 3 < /tmp/timing_finasu.patch; then
+              echo "时序均衡补丁应用成功"
+            else
+              echo "!! 时序均衡补丁失败（上游可能已改动），本次不含该补丁"
+            fi
+          fi
+          echo "时序均衡标记数: $(grep -c '时序均衡' "$F" || true)"
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
         if: inputs.lz4_enable
