@@ -280,6 +280,15 @@ jobs:
           echo '$(info [DBG] src=$(src) srctree=$(srctree) KSU_KERNEL_DIR=$(KSU_KERNEL_DIR))' >> "$KB"
           echo "Kbuild include 已改为绝对路径"
 
+          # === 让内核信任 FinaSU 官方管理器（0x2cc / 2d89b50a…）===
+          # FinaSU Kbuild 默认 KSU_EXPECTED_SIZE/HASH = 0x033b / c371…（官方 KernelSU 管理器）
+          # 必须就地改成本家证书：ccflags-y 在 248 行就展开，追加到文件末尾无效。
+          sed -i 's|^KSU_EXPECTED_SIZE := 0x033b|KSU_EXPECTED_SIZE := 0x2cc|' "$KB"
+          sed -i 's|^KSU_EXPECTED_HASH := c371061b19d8c7d7d6133c6a9bafe198fa944e50c1b31c9d8daa8d7f1fc2d2d6|KSU_EXPECTED_HASH := 2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458|' "$KB"
+          echo "--- 覆盖后的 manager 签名（构建日志里 $(info) 也会打印）---"
+          grep -n '^KSU_EXPECTED_SIZE :=\|^KSU_EXPECTED_HASH :=' "$KB"
+          grep -q '2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458' "$KB" || { echo "签名覆盖失败"; exit 1; }
+
           # 计算版本号（与 FinaSU 的 Kbuild 同算法：30000 + git rev-list --count）
           git config --global --add safe.directory "$PWD/common/drivers/kernelsu" 2>/dev/null || true
           N=$(git -C ./common/drivers/kernelsu rev-list --count HEAD 2>/dev/null || echo 0)
@@ -901,7 +910,8 @@ jobs:
           
           ### ⏫️ 更新内容：
           - 更新${{ env.KSU_TYPENAME }}至最新版本（${{ needs.build.outputs.ksuver }}）
-          - 本线为「FinaSU 实验线」：不含模块名/符号/sysfs/控制节点隐藏（hide_modules 未移植）
+          - 本线为「FinaSU 全功能线」：内核信任 FinaSU 官方管理器（0x2cc / 2d89b50a…）
+          - 不含主线加固（模块名/符号/sysfs/控制节点隐藏、puid 过滤桥接均未包含）
           - 内核侧 SUSFS 为原版 2.4.0 + SELinux 裁剪（与主线同一裁剪规则）
           
           ### 📋 安装方法 | Installation Guide
