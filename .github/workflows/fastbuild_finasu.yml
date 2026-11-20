@@ -466,15 +466,15 @@ jobs:
 
           FILTER_NS = (
           "\t/* [hide-dex2oat] 隐藏 FolkZygisk 建立的 dex2oat 包装挂载（非 root 视角） */\n"
-          "\tif (mnt->mnt_mountpoint && mnt->mnt_mountpoint->d_name.name &&\n"
-          "\t    !strncmp(mnt->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
+          "\tif (real_mount(mnt)->mnt_mountpoint && real_mount(mnt)->mnt_mountpoint->d_name.name &&\n"
+          "\t    !strncmp(real_mount(mnt)->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
           "\t\treturn 0;\n"
           )
           FILTER_BASE = (
           "\t/* [hide-dex2oat] 非 root 视角过滤 dex2oat 包装挂载 */\n"
           "\tif (from_kuid_munged(current_user_ns(), current_uid()) != 0 &&\n"
-          "\t    mnt->mnt_mountpoint && mnt->mnt_mountpoint->d_name.name &&\n"
-          "\t    !strncmp(mnt->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
+          "\t    real_mount(mnt)->mnt_mountpoint && real_mount(mnt)->mnt_mountpoint->d_name.name &&\n"
+          "\t    !strncmp(real_mount(mnt)->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
           "\t\treturn 0;\n"
           )
 
