@@ -423,6 +423,26 @@ jobs:
           fi
           echo "时序均衡标记数: $(grep -c '时序均衡' "$F" || true)"
 
+      - name: 统一 selinux_hide 的上下文解析路径（FinaSU 线）
+        run: |
+          echo "把 my_setprocattr 的 live+EAGAIN 两段式改成单段 backup 解析…"
+          cd kernel_workspace/common
+          D=drivers/kernelsu
+          F=$D/feature/selinux_hide.c
+          [ -f "$F" ] || { echo "找不到 $F，跳过"; exit 0; }
+          if grep -q 'unify-lookup' "$F"; then
+            echo "已统一解析路径，跳过"
+          else
+            BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch"
+            wget -q "$BASE/ksu_attr_lookup_unify.patch?v=$(date +%s)" -O /tmp/unify.patch || { echo "拉取补丁失败"; exit 1; }
+            if patch -p2 -d "$D" -F 3 < /tmp/unify.patch; then
+              echo "解析路径统一补丁应用成功"
+            else
+              echo "!! 统一补丁失败（上游可能已改动），本次不含该补丁"
+            fi
+          fi
+          echo "unify 标记数: $(grep -c 'unify-lookup' "$F" || true)"
+
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
         if: inputs.lz4_enable
         run: |
