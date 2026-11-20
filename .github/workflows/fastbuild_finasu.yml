@@ -836,6 +836,21 @@ jobs:
           echo "编译后空间:"
           df -h
 
+      - name: 应用KPM并修补内核（FinaSU 线）
+        if: inputs.kpm_enable
+        run: |
+          echo "正在应用 KPatch-Next 并修补内核镜像…"
+          cd kernel_workspace/common/out/arch/arm64/boot
+          [ -f Image ] || { echo "Image 不存在，跳过"; exit 0; }
+          BASE="https://github.com/cctv18/KPatch-Next/releases/latest/download"
+          wget -q "$BASE/kptools-linux" -O ./kptools-linux || { echo "下载 kptools 失败"; exit 1; }
+          wget -q "$BASE/kpimg-linux"   -O ./kpimg-linux   || { echo "下载 kpimg 失败"; exit 1; }
+          chmod +x ./kptools-linux
+          ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage || { echo "kptools 打补丁失败"; exit 1; }
+          [ -s ./oImage ] || { echo "输出镜像为空"; exit 1; }
+          rm -f Image && mv oImage Image
+          echo "KPM 已打入内核镜像: $(ls -l Image | awk '{print $5}') 字节"
+
       - name: 保存新的 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
@@ -843,10 +858,6 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
          
-      - name: 应用KPM并修补内核（FinaSU 线跳过）
-        run: |
-          echo "FinaSU 实验线：跳过 KPM 修补"
-
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
         run: |
