@@ -870,7 +870,9 @@ jobs:
           echo "正在应用 KPatch-Next 并修补内核镜像…"
           cd kernel_workspace/common/out/arch/arm64/boot
           [ -f Image ] || { echo "Image 不存在，跳过"; exit 0; }
-          BASE="https://github.com/cctv18/KPatch-Next/releases/latest/download"
+          # kptools / kpimg 只有上游 KernelSU-Next/KPatch-Next 发布，
+          # cctv18 的 fork 只提供 kpn.zip（AK3 里那份），两者配合使用与主线一致
+          BASE="https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download"
           wget -q "$BASE/kptools-linux" -O ./kptools-linux || { echo "下载 kptools 失败"; exit 1; }
           wget -q "$BASE/kpimg-linux"   -O ./kpimg-linux   || { echo "下载 kpimg 失败"; exit 1; }
           chmod +x ./kptools-linux
