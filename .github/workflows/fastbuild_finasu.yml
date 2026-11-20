@@ -294,6 +294,21 @@ jobs:
           # 在读取规则时即展开，追加到文件末尾来不及
           sed -i 's|^KSU_KERNEL_DIR := $(srctree)/$(src)|KSU_KERNEL_DIR := $(srctree)/drivers/kernelsu|' "$KB"
           grep -n '^KSU_KERNEL_DIR := ' "$KB"
+
+          # 版本串去掉 @<branch>：显示 v1.6.5-f96445f9（不暴露分支名）
+          python3 - "$KB" <<'PYVER'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+before = s
+s = s.replace('@$(KSU_VERSION_BRANCH)', '')
+if s != before:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('已去掉 @$(KSU_VERSION_BRANCH)')
+else:
+    print('未找到分支片段，保持原样')
+PYVER
+          grep -n 'KSU_VERSION_FULL :=' "$KB" | head -2
           echo '$(info [DBG] src=$(src) srctree=$(srctree) KSU_KERNEL_DIR=$(KSU_KERNEL_DIR))' >> "$KB"
           echo "Kbuild include 已改为绝对路径"
 
