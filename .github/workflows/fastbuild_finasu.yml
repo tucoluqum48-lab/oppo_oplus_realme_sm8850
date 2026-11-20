@@ -23,6 +23,14 @@ on:
           - 'ksunext'
           - 'ksu'
           - 'none'
+      hook_backend:
+        description: 'Hook 后端。tracepoint=默认（成熟）；inline=SUSFS Inline（需 50_add 的插桩点，仅 ARM64 Built-In）'
+        required: true
+        type: choice
+        default: 'tracepoint'
+        options:
+          - 'tracepoint'
+          - 'inline'
       susfs_patch_mode:
         description: 'SUSFS 补丁范围。full=27块全打(策略面全挡/时序偶发)；partial=只丢hooks.c(挡策略面+避开时序抖动)；trimmed=丢SELinux四块(策略面全暴露)'
         required: true
@@ -339,40 +347,6 @@ jobs:
         run: |
           echo "FinaSU 实验线：跳过「补齐 SUSFS 2.4.0 缺失的 Kconfig 项」"
 
-      - name: 检查 SUSFS Inline 前提（只检查，不切换）
-        run: |
-          echo "=== 检查内核里是否已有 Inline 所需的 ksu_handle_* 插桩点 ==="
-          cd kernel_workspace
-          SRC=common
-          MISS=0
-          check() {
-            f="$SRC/$1"; sym="$2"
-            if [ -f "$f" ] && grep -Fq "$sym" "$f"; then
-              printf "  OK    %-24s %-40s\n" "$1" "$sym"
-            else
-              printf "  MISS  %-24s %-40s\n" "$1" "$sym"
-              MISS=$((MISS+1))
-            fi
-          }
-          check drivers/input/input.c ksu_handle_input_handle_event
-          check fs/exec.c ksu_handle_execveat
-          check fs/exec.c ksu_handle_execveat_sucompat
-          check fs/exec.c ksu_handle_post_execveat_sucompat
-          check fs/exec.c ksu_setup_preinit_file
-          check fs/exec.c ksu_preinit_handle_post_execveat
-          check fs/open.c ksu_handle_faccessat
-          check fs/read_write.c ksu_handle_sys_read
-          check fs/stat.c ksu_handle_stat
-          check fs/stat.c ksu_handle_vfs_fstat
-          check kernel/reboot.c ksu_handle_sys_reboot
-          check kernel/sys.c ksu_handle_setresuid
-          echo "=== 缺失项: $MISS ==="
-          if [ "$MISS" -eq 0 ]; then
-            echo "结论: SUSFS Inline 可用"
-          else
-            echo "结论: SUSFS Inline 不可用（需先补上面 MISS 的插桩点）"
-          fi
-
       - name: 应用 SUSFS 内核补丁（FinaSU 线）
         if: inputs.susfs_enable
         run: |
@@ -425,6 +399,42 @@ jobs:
             grep -q 'susfs_is_sus_type_rcu' security/selinux/ss/services.c \
               && echo "  → sus_type 挂点已就位" \
               || echo "  → 警告：sus_type 挂点缺失"
+          fi
+
+      - name: 检查 SUSFS Inline 前提（hook_backend=inline 时强制）
+        if: inputs.hook_backend == 'inline'
+        run: |
+          echo "=== 检查内核里是否已有 Inline 所需的 ksu_handle_* 插桩点 ==="
+          cd kernel_workspace
+          SRC=common
+          MISS=0
+          check() {
+            f="$SRC/$1"; sym="$2"
+            if [ -f "$f" ] && grep -Fq "$sym" "$f"; then
+              printf "  OK    %-24s %-40s\n" "$1" "$sym"
+            else
+              printf "  MISS  %-24s %-40s\n" "$1" "$sym"
+              MISS=$((MISS+1))
+            fi
+          }
+          check drivers/input/input.c ksu_handle_input_handle_event
+          check fs/exec.c ksu_handle_execveat
+          check fs/exec.c ksu_handle_execveat_sucompat
+          check fs/exec.c ksu_handle_post_execveat_sucompat
+          check fs/exec.c ksu_setup_preinit_file
+          check fs/exec.c ksu_preinit_handle_post_execveat
+          check fs/open.c ksu_handle_faccessat
+          check fs/read_write.c ksu_handle_sys_read
+          check fs/stat.c ksu_handle_stat
+          check fs/stat.c ksu_handle_vfs_fstat
+          check kernel/reboot.c ksu_handle_sys_reboot
+          check kernel/sys.c ksu_handle_setresuid
+          echo "=== 缺失项: $MISS ==="
+          if [ "$MISS" -eq 0 ]; then
+            echo "结论: SUSFS Inline 可用"
+          else
+            echo "结论: SUSFS Inline 不可用（缺少上面 MISS 的插桩点）"
+            exit 1
           fi
 
       - name: 应用 hide_modules 补丁（FinaSU 线）
@@ -529,6 +539,15 @@ jobs:
         if: inputs.susfs_enable
         run: |
           cd kernel_workspace
+          if [[ "${{ github.event.inputs.hook_backend }}" == "inline" ]]; then
+            echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_HOOK_TRACEPOINT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "-- Hook 后端: SUSFS Inline"
+          else
+            echo "CONFIG_KSU_HOOK_TRACEPOINT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_HOOK_SUSFS_INLINE=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "-- Hook 后端: Tracepoint"
+          fi
           echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
