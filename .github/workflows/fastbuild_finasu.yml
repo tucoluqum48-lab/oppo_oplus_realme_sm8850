@@ -23,11 +23,15 @@ on:
           - 'ksunext'
           - 'ksu'
           - 'none'
-      susfs_full_patch:
-        description: 'SUSFS 是否打完整补丁（含 SELinux 4 个文件）。true=完整（sus_type/avd/selinuxfs/status），false=裁剪版'
+      susfs_patch_mode:
+        description: 'SUSFS 补丁范围。full=27块全打(策略面全挡/时序偶发)；partial=只丢hooks.c(挡策略面+避开时序抖动)；trimmed=丢SELinux四块(策略面全暴露)'
         required: true
-        type: boolean
-        default: true
+        type: choice
+        default: 'full'
+        options:
+          - 'full'
+          - 'partial'
+          - 'trimmed'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -318,37 +322,44 @@ jobs:
           cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           cd ./common
-          if [[ "${{ github.event.inputs.susfs_full_patch }}" == "true" ]]; then
-            echo "-- 完整补丁模式：保留 SELinux 4 个文件（sus_type / avd / selinuxfs / status）"
-            SUSFS_PATCH=$(ls 50_add_susfs_in_gki-*.patch | head -1)
-            echo "   使用: $SUSFS_PATCH"
-            grep -c '^diff --git' "$SUSFS_PATCH" | sed 's/^/   文件块数: /'
+          MODE="${{ github.event.inputs.susfs_patch_mode }}"
+          export MODE
+          SUSFS_FULL=$(ls 50_add_susfs_in_gki-*.patch | head -1)
+          if [ "$MODE" = "full" ]; then
+            echo "-- full：27 块全打（sus_type / avd / selinuxfs / status / hooks）"
+            SUSFS_PATCH="$SUSFS_FULL"
           else
-            echo "-- 裁剪模式：丢弃 SELinux 4 个文件（与 KSU selinux_hide 争 hook）"
-            python3 - <<'PYTRIM'
-          import re, glob
-          src = glob.glob("50_add_susfs_in_gki-*.patch")[0]
-          blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-          DROP = ("security/selinux/hooks.c", "security/selinux/selinuxfs.c",
-                  "security/selinux/ss/services.c", "security/selinux/status.c")
-          kept = [b for b in blocks if not any(d in b.split(chr(10))[0] for d in DROP)]
-          open("50_trimmed.patch", "w").write("".join(kept))
-          print(f"-- SUSFS trimmed: {len(kept)-1}/{len(blocks)-1} blocks kept")
-          PYTRIM
-            SUSFS_PATCH=50_trimmed.patch
+            if [ "$MODE" = "partial" ]; then
+              echo "-- partial：只丢 security/selinux/hooks.c（避开 setprocattr 争用与时序抖动）"
+              DROPLIST="security/selinux/hooks.c"
+            else
+              echo "-- trimmed：丢 SELinux 四块（策略面全暴露）"
+              DROPLIST="security/selinux/hooks.c security/selinux/selinuxfs.c security/selinux/ss/services.c security/selinux/status.c"
+            fi
+            DROPLIST="$DROPLIST" python3 - "$SUSFS_FULL" <<'PYTRIM'
+import os, re, sys
+src = sys.argv[1]
+blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
+DROP = tuple(os.environ["DROPLIST"].split())
+kept = [b for b in blocks if not any(d in b.splitlines()[0] for d in DROP)]
+open("50_mode.patch", "w").write("".join(kept))
+print(f"-- SUSFS mode={os.environ.get('MODE','?')}: {len(kept)-1}/{len(blocks)-1} blocks kept")
+PYTRIM
+            SUSFS_PATCH=50_mode.patch
           fi
+          echo "   使用: $SUSFS_PATCH ($(grep -c '^diff --git' "$SUSFS_PATCH") 块)"
           patch -p1 -F 3 < "$SUSFS_PATCH" || true
           echo "=== 失败块检查 ==="
           ls *.rej 2>/dev/null && { echo "有 .rej：补丁未完全应用"; } || echo "无 .rej"
           echo "=== 确认 SUSFS 文件就位 ==="
           ls -l include/linux/susfs.h include/linux/susfs_def.h fs/susfs.c || { echo "SUSFS 文件缺失"; exit 1; }
           echo "susfs_add_sus_type 出现次数: $(grep -c 'susfs_add_sus_type' fs/susfs.c || true)"
-          if [[ "${{ github.event.inputs.susfs_full_patch }}" == "true" ]]; then
-            echo "=== 完整模式：确认 SELinux 补丁落地 ==="
-            for f in security/selinux/hooks.c security/selinux/selinuxfs.c \
-                     security/selinux/ss/services.c security/selinux/status.c; do
-              printf "  %-38s susfs 符号数=%s\n" "$f" "$(grep -c 'susfs' "$f" 2>/dev/null || echo 0)"
-            done
+          echo "=== SELinux 块落地情况（按模式应有不同）==="
+          for f in security/selinux/hooks.c security/selinux/selinuxfs.c \
+                   security/selinux/ss/services.c security/selinux/status.c; do
+            printf "  %-38s susfs 符号数=%s\n" "$f" "$(grep -c 'susfs' "$f" 2>/dev/null || echo 0)"
+          done
+          if [ "$MODE" != "trimmed" ]; then
             grep -q 'susfs_is_sus_type_rcu' security/selinux/ss/services.c \
               && echo "  → sus_type 挂点已就位" \
               || echo "  → 警告：sus_type 挂点缺失"
