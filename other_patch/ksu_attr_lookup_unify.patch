@@ -1,5 +1,5 @@
---- a/feature/selinux_hide.c
-+++ b/feature/selinux_hide.c
+--- a/kernel/feature/selinux_hide.c
++++ b/kernel/feature/selinux_hide.c
 @@ -260,16 +260,22 @@
          if (str[size - 1] == '\n') {
              str[size - 1] = 0;
@@ -26,6 +26,6 @@
 +            if (error)
 +                return error;
          }
-     }
- 
-     new = prepare_creds();
+     } else if (size >= 4) {
+         /*
+          * 时序均衡：换行前缀路径原本完全跳过策略解析，
