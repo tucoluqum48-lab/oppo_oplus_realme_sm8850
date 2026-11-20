@@ -452,6 +452,59 @@ jobs:
             exit 1
           fi
 
+      - name: 隐藏 FolkZygisk 的 dex2oat 挂载（仅非 root 视角）
+        if: inputs.susfs_enable
+        run: |
+          echo "在 /proc/*/mountinfo 输出层过滤 dex2oat 包装挂载（root 仍可见）…"
+          cd kernel_workspace/common
+          F=fs/proc_namespace.c
+          [ -f "$F" ] || { echo "缺少 $F，跳过"; exit 0; }
+          python3 - "$F" <<'PYDEX'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+
+          FILTER_NS = (
+          "\t/* [hide-dex2oat] 隐藏 FolkZygisk 建立的 dex2oat 包装挂载（非 root 视角） */\n"
+          "\tif (mnt->mnt_mountpoint && mnt->mnt_mountpoint->d_name.name &&\n"
+          "\t    !strncmp(mnt->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
+          "\t\treturn 0;\n"
+          )
+          FILTER_BASE = (
+          "\t/* [hide-dex2oat] 非 root 视角过滤 dex2oat 包装挂载 */\n"
+          "\tif (from_kuid_munged(current_user_ns(), current_uid()) != 0 &&\n"
+          "\t    mnt->mnt_mountpoint && mnt->mnt_mountpoint->d_name.name &&\n"
+          "\t    !strncmp(mnt->mnt_mountpoint->d_name.name, \"dex2oat\", 7))\n"
+          "\t\treturn 0;\n"
+          )
+
+          if 'hide-dex2oat' in s:
+              print('已存在过滤代码，跳过')
+          else:
+              # 1) susfs_show_mountinfo（非 su 进程走这条）
+              a = "static int susfs_show_mountinfo(struct seq_file *m, struct vfsmount *mnt)\n{\n"
+              if a in s:
+                  s = s.replace(a, a + FILTER_NS, 1)
+                  print('已插入 susfs_show_mountinfo')
+              else:
+                  print('未找到 susfs_show_mountinfo（SUSFS 未打？）')
+              # 2) base show_mountinfo（补一刀，带 uid 判断）
+              b = "static int show_mountinfo(struct seq_file *m, struct vfsmount *mnt)\n{\n"
+              if b in s:
+                  s = s.replace(b, b + FILTER_BASE, 1)
+                  print('已插入 show_mountinfo')
+              else:
+                  print('未找到 show_mountinfo')
+              # 3) 确保包含 uidgid / sched 头
+              if 'linux/uidgid.h' not in s:
+                  s = s.replace('#include <linux/fs_struct.h>', '#include <linux/fs_struct.h>\n#include <linux/uidgid.h>', 1)
+              if 'linux/sched.h' not in s and 'linux/sched/task.h' in s:
+                  s = s.replace('#include <linux/sched/task.h>', '#include <linux/sched/task.h>\n#include <linux/sched.h>', 1)
+              open(p, 'w', encoding='utf-8').write(s)
+          PYDEX
+          grep -c 'hide-dex2oat' "$F" | sed 's/^/  过滤点数量: /'
+          grep -n 'hide-dex2oat' "$F" | head -4
+
       - name: 应用 hide_modules 补丁（FinaSU 线）
         if: inputs.susfs_enable
         run: |
