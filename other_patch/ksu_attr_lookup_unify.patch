@@ -1,0 +1,31 @@
+--- a/feature/selinux_hide.c
++++ b/feature/selinux_hide.c
+@@ -260,16 +260,22 @@
+         if (str[size - 1] == '\n') {
+             str[size - 1] = 0;
+             size--;
+         }
+-        error = security_context_to_sid_live(value, size, &sid);
+-        if (error == -EAGAIN) {
+-            backup_error = security_context_to_sid_with_policy(backup_sepolicy, value, size, &backup_sid, SECSID_NULL,
+-                                                               GFP_KERNEL, &sid, &error);
++        /*
++         * [unify-lookup] 单段 backup 策略解析，与 BakaSU 同构：
++         * 原先 "live 优先 + -EAGAIN 回退" 是两段式，
++         * 命中与回退耗时不同 → 双峰分布 → 被判"时序异常"。
++         */
++        if (backup_sepolicy) {
++            backup_error = security_context_to_sid_with_policy(backup_sepolicy, value, size, &backup_sid,
++                                                               SECSID_NULL, GFP_KERNEL, &sid, &error);
+             if (backup_error || error)
+                 return backup_error ?: error;
+-        } else if (error) {
+-            return error;
++        } else {
++            error = security_context_to_sid_live(value, size, &sid);
++            if (error)
++                return error;
+         }
+     }
+ 
+     new = prepare_creds();
