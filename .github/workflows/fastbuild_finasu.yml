@@ -298,6 +298,34 @@ jobs:
           grep -n '^KSU_EXPECTED_SIZE :=\|^KSU_EXPECTED_HASH :=' "$KB"
           grep -q '2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458' "$KB" || { echo "签名覆盖失败"; exit 1; }
 
+          # === 追加第二信任槽：让内核同时信任"我们自建的管理器" ===
+          # CONFIG_KSU_DYNAMIC_MANAGER 生效时 apk_sign.c 用 { FINASU_TRUSTED… } + 预设行；
+          # FINASU_TRUSTED 会优先取 slot2，直接把 slot2 设成我们证书会挤掉官方 0x2cc
+          # → 改为在信任表里追加一行 TRUSTED，两个证书都保留
+          AC=drivers/kernelsu/manager/apk_sign.c
+          if [ -f "$AC" ]; then
+            python3 - "$AC" <<'PYINS'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+          marker = 'APK_SIGN_FLAG_TRUSTED, "FinaSU" },'
+          extra = '\n    { 0x369, "77969000a4789181b19bf0cdd5ef24b2ecf731e17082e439e4d1e75f1bad673d", APK_SIGN_FLAG_TRUSTED, "CustomManager" },'
+          if '77969000a478' in s:
+              print('already-present')
+          elif marker in s:
+              s = s.replace(marker, marker + extra, 1)
+              open(p, 'w', encoding='utf-8').write(s)
+              print('inserted')
+          else:
+              print('marker-missing')
+          PYINS
+            grep -n 'CustomManager' "$AC" || true
+            grep -q '77969000a478' "$AC" || { echo "追加信任槽失败"; exit 1; }
+            echo "双信任槽就位"
+          else
+            echo "未找到 apk_sign.c，跳过第二槽"
+          fi
+
           # 计算版本号（与 FinaSU 的 Kbuild 同算法：30000 + git rev-list --count）
           git config --global --add safe.directory "$PWD/common/drivers/kernelsu" 2>/dev/null || true
           N=$(git -C ./common/drivers/kernelsu rev-list --count HEAD 2>/dev/null || echo 0)
