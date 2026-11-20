@@ -337,14 +337,14 @@ jobs:
               DROPLIST="security/selinux/hooks.c security/selinux/selinuxfs.c security/selinux/ss/services.c security/selinux/status.c"
             fi
             DROPLIST="$DROPLIST" python3 - "$SUSFS_FULL" <<'PYTRIM'
-import os, re, sys
-src = sys.argv[1]
-blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
-DROP = tuple(os.environ["DROPLIST"].split())
-kept = [b for b in blocks if not any(d in b.splitlines()[0] for d in DROP)]
-open("50_mode.patch", "w").write("".join(kept))
-print(f"-- SUSFS mode={os.environ.get('MODE','?')}: {len(kept)-1}/{len(blocks)-1} blocks kept")
-PYTRIM
+          import os, re, sys
+          src = sys.argv[1]
+          blocks = re.split(r'(?m)^(?=diff --git )', open(src).read())
+          DROP = tuple(os.environ["DROPLIST"].split())
+          kept = [b for b in blocks if not any(d in b.splitlines()[0] for d in DROP)]
+          open("50_mode.patch", "w").write("".join(kept))
+          print(f"-- SUSFS mode={os.environ.get('MODE','?')}: {len(kept)-1}/{len(blocks)-1} blocks kept")
+          PYTRIM
             SUSFS_PATCH=50_mode.patch
           fi
           echo "   使用: $SUSFS_PATCH ($(grep -c '^diff --git' "$SUSFS_PATCH") 块)"
