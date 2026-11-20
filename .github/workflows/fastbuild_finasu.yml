@@ -339,6 +339,40 @@ jobs:
         run: |
           echo "FinaSU 实验线：跳过「补齐 SUSFS 2.4.0 缺失的 Kconfig 项」"
 
+      - name: 检查 SUSFS Inline 前提（只检查，不切换）
+        run: |
+          echo "=== 检查内核里是否已有 Inline 所需的 ksu_handle_* 插桩点 ==="
+          cd kernel_workspace
+          SRC=common
+          MISS=0
+          check() {
+            f="$SRC/$1"; sym="$2"
+            if [ -f "$f" ] && grep -Fq "$sym" "$f"; then
+              printf "  OK    %-24s %-40s\n" "$1" "$sym"
+            else
+              printf "  MISS  %-24s %-40s\n" "$1" "$sym"
+              MISS=$((MISS+1))
+            fi
+          }
+          check drivers/input/input.c ksu_handle_input_handle_event
+          check fs/exec.c ksu_handle_execveat
+          check fs/exec.c ksu_handle_execveat_sucompat
+          check fs/exec.c ksu_handle_post_execveat_sucompat
+          check fs/exec.c ksu_setup_preinit_file
+          check fs/exec.c ksu_preinit_handle_post_execveat
+          check fs/open.c ksu_handle_faccessat
+          check fs/read_write.c ksu_handle_sys_read
+          check fs/stat.c ksu_handle_stat
+          check fs/stat.c ksu_handle_vfs_fstat
+          check kernel/reboot.c ksu_handle_sys_reboot
+          check kernel/sys.c ksu_handle_setresuid
+          echo "=== 缺失项: $MISS ==="
+          if [ "$MISS" -eq 0 ]; then
+            echo "结论: SUSFS Inline 可用"
+          else
+            echo "结论: SUSFS Inline 不可用（需先补上面 MISS 的插桩点）"
+          fi
+
       - name: 应用 SUSFS 内核补丁（FinaSU 线）
         if: inputs.susfs_enable
         run: |
