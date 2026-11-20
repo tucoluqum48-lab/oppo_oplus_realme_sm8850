@@ -302,7 +302,7 @@ jobs:
           # CONFIG_KSU_DYNAMIC_MANAGER 生效时 apk_sign.c 用 { FINASU_TRUSTED… } + 预设行；
           # FINASU_TRUSTED 会优先取 slot2，直接把 slot2 设成我们证书会挤掉官方 0x2cc
           # → 改为在信任表里追加一行 TRUSTED，两个证书都保留
-          AC=drivers/kernelsu/manager/apk_sign.c
+          AC=./common/drivers/kernelsu/manager/apk_sign.c
           if [ -f "$AC" ]; then
             python3 - "$AC" <<'PYINS'
           import sys
