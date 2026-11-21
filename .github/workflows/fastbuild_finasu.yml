@@ -19,13 +19,13 @@ on:
         options:
           - 'deepseeksu'
       hook_backend:
-        description: 'Hook 后端。tracepoint=默认（成熟）；inline=SUSFS Inline（需 50_add 的插桩点，仅 ARM64 Built-In）'
+        description: 'Hook 后端。inline=默认（SUSFS Inline，需 50_add 的插桩点，构建时强校验）；tracepoint=回退选项'
         required: true
         type: choice
-        default: 'tracepoint'
+        default: 'inline'
         options:
-          - 'tracepoint'
           - 'inline'
+          - 'tracepoint'
       susfs_patch_mode:
         description: 'SUSFS 补丁范围。full=27块全打(策略面全挡/时序偶发)；partial=只丢hooks.c(挡策略面+避开时序抖动)；trimmed=丢SELinux四块(策略面全暴露)'
         required: true
