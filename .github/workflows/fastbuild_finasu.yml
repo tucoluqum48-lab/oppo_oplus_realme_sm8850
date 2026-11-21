@@ -1160,15 +1160,13 @@ jobs:
           - SUSFS 补丁范围：${{ github.event.inputs.susfs_patch_mode }}
           - Hook 后端：${{ github.event.inputs.hook_backend }}
           - 管理器：自建 **DeepseekSU**（包名 ly.deepseek.dsh，签名 size 0x369 / hash 77969000…）
-          - 内核侧已信任的管理器签名：FinaSU 官方（0x2cc / 2d89b50a…）+ 自建（0x369 / 77969000…）双槽
 
           ### ⏫️ 更新内容：
-          - 更新 ${{ env.KSU_TYPENAME }} 至最新版本（${{ needs.build.outputs.ksuver }}）
-          - 本线为「FinaSU 全功能线」，在官方基础上追加以下加固：
+          - 更新 DeepseekSU 内核至最新版本（${{ needs.build.outputs.ksuver }}）
+          - 本线为「DeepseekSU 全功能线」，在官方基础上追加以下加固：
             - **hide_modules 补丁**：模块名 / kallsyms 符号 / /sys/module 条目 / 控制节点（`/proc/oplus_mem_zone`）隐藏，需配合 `96-hide-ko.sh` 登记模块名
             - **SELinux attr 时序均衡（v1）+ 解析路径统一（unify）**：抹平 live/backup 双解析造成的可测差异
             - **dex2oat 挂载过滤**：非 root 视角隐藏 FolkZygisk 的 `/apex/**/dex2oat{32,64}` 包装挂载（SUSFS hide_mounts 关闭时兜底）
-            - **双信任槽**：官方 FinaSU 签名 + 自建签名（0x369），两者任装其一都能被识别为管理器
           - SUSFS 采用 2.4.0 完整补丁（27 块，`susfs_patch_mode=full`），SELinux 四块默认保留；如需更小开销可改 `partial` / `trimmed`
           - Hook 后端可选：`tracepoint`（默认，成熟）或 `inline`（SUSFS Inline，需 50_add 插桩点，构建时会强校验）
           
