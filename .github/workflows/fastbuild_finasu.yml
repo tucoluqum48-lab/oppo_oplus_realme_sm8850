@@ -527,7 +527,6 @@ jobs:
           echo "hide_modules 应用完成"
 
       - name: 生成 UAPI 头（FinaSU preinit 依赖）
-        if: inputs.susfs_enable
         run: |
           cd kernel_workspace/common
           # SUSFS 补丁在 fs/exec.c 调用了 ksu_preinit_*；FinaSU 仅在
@@ -828,7 +827,7 @@ jobs:
             for f in ./common/scripts/setlocalversion; do
               sed -i "\$s|echo \"\\\$res\"|echo \"-${{ github.event.inputs.kernel_suffix }}\"|" "$f"
             done
-            sudo sed -i 's/-4k/-${{ github.event.inputs.KERNEL_SUFFIX }}/g' ./common/arch/arm64/configs/gki_defconfig
+            sudo sed -i 's/-4k/-${{ github.event.inputs.kernel_suffix }}/g' ./common/arch/arm64/configs/gki_defconfig
           else
             echo "当前内核版本后缀：${{ env.KERNEL_NAME }}"
             for f in ./common/scripts/setlocalversion; do
@@ -1018,13 +1017,13 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.ksu_type }}" == "deepseeksu" || "${{ github.event.inputs.ksu_type }}" == "finasu" ]]; then
             KSU_TYPENAME="DeepseekSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "ksunext" ]]; then
             KSU_TYPENAME="KSUNext"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "ksu" ]]; then
             KSU_TYPENAME="KSU"
           else
             KSU_TYPENAME="none"
@@ -1121,15 +1120,15 @@ jobs:
           echo "TIME_FORM=$TIME_FORM" >> $GITHUB_ENV
           TAG_HEAD="OPPO-OPlus-Realme-build"
           echo "TAG_HEAD=$TAG_HEAD" >> $GITHUB_ENV
-          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+          if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU Ultra"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "ksunext" ]]; then
             KSU_TYPENAME="KSUNext"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "ksu" ]]; then
             KSU_TYPENAME="KSU"
           else
             KSU_TYPENAME="无内置KSU"
