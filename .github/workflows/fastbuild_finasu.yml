@@ -12,17 +12,12 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'root 实现（本线固定 FinaSU；选 bakasu/sukisu/ksunext/ksu/none 均会被忽略并仍集成 FinaSU）'
+        description: 'root 实现（本线固定 FinaSU 驱动 + DeepseekSU 管理器，无其它选项）'
         required: true
         type: choice
-        default: 'finasu'
+        default: 'deepseeksu'
         options:
-          - 'finasu'
-          - 'bakasu'
-          - 'sukisu'
-          - 'ksunext'
-          - 'ksu'
-          - 'none'
+          - 'deepseeksu'
       hook_backend:
         description: 'Hook 后端。tracepoint=默认（成熟）；inline=SUSFS Inline（需 50_add 的插桩点，仅 ARM64 Built-In）'
         required: true
@@ -1021,8 +1016,8 @@ jobs:
             echo "未找到内核镜像文件，构建可能出错"
             exit 1
           fi
-          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
-            KSU_TYPENAME="FinaSU"
+          if [[ "${{ github.event.inputs.ksu_type }}" == "deepseeksu" || "${{ github.event.inputs.ksu_type }}" == "finasu" ]]; then
+            KSU_TYPENAME="DeepseekSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
