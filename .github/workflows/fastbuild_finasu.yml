@@ -1,4 +1,4 @@
-name: 6.12.23 FinaSU 正式线（内建加固 · DeepseekSU 管理器）
+name: 6.12.23 DeepseekSU欧加真oki内核快速构建
 
 env:
   TZ: Asia/Shanghai
