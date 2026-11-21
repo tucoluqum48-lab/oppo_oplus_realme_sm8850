@@ -1146,7 +1146,7 @@ jobs:
           - 内核版本号: ${{ env.FULL_VERSION }}
           - 编译时间: ${{ env.TIME_FORM }}
           - 机型：欧加真骁龙8E Gen5通用 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 内核（基于一加15 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 版官方源码）
-          - KSU分支：${{ env.KSU_TYPENAME }}
+          - KSU 分支：DeepseekSU
           - susfs支持：${{ github.event.inputs.susfs_enable }}
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
@@ -1159,7 +1159,6 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - SUSFS 补丁范围：${{ github.event.inputs.susfs_patch_mode }}
           - Hook 后端：${{ github.event.inputs.hook_backend }}
-          - 管理器：自建 **DeepseekSU**（包名 ly.deepseek.dsh，签名 size 0x369 / hash 77969000…）
 
           ### ⏫️ 更新内容：
           - 更新 DeepseekSU 内核至最新版本（${{ needs.build.outputs.ksuver }}）
