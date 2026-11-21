@@ -1,4 +1,4 @@
-name: 6.12.23 FinaSU 实验线（仅验证构建）
+name: 6.12.23 FinaSU 正式线（内建加固 · DeepseekSU 管理器）
 
 env:
   TZ: Asia/Shanghai
@@ -360,7 +360,7 @@ jobs:
 
       - name: 补齐 SUSFS 2.4.0 缺失的 Kconfig 项（FinaSU 线跳过）
         run: |
-          echo "FinaSU 实验线：跳过「补齐 SUSFS 2.4.0 缺失的 Kconfig 项」"
+          echo "FinaSU 正式线：跳过「补齐 SUSFS 2.4.0 缺失的 Kconfig 项」（本线自带）"
 
       - name: 应用 SUSFS 内核补丁（FinaSU 线）
         if: inputs.susfs_enable
